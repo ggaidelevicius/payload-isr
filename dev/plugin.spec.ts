@@ -1,21 +1,22 @@
 import type { Config } from 'payload'
 
-import { payloadIsr, type LoggerLike } from '../src/index.js'
-import { defaultUnpublishMatcher } from '../src/utils.js'
 import { describe, expect, test, vi } from 'vitest'
+
+import { type LoggerLike, payloadIsr } from '../src/index.js'
+import { defaultUnpublishMatcher } from '../src/utils.js'
 
 const createBaseConfig = (): Config =>
   ({
     collections: [
       {
-        fields: [],
         slug: 'posts',
+        fields: [],
       },
     ],
     globals: [
       {
-        fields: [],
         slug: 'site-settings',
+        fields: [],
       },
     ],
   }) as Config
@@ -71,8 +72,8 @@ describe('payloadIsr runtime safeguards', () => {
     const plugin = payloadIsr({
       collections: [
         {
-          pathResolver: () => ['/posts'],
           slug: 'posts',
+          pathResolver: () => ['/posts'],
         },
       ],
       logger,
@@ -92,16 +93,16 @@ describe('payloadIsr runtime safeguards', () => {
     const plugin = payloadIsr({
       collections: [
         {
+          slug: 'posts',
           disabled: true,
           pathResolver: () => ['/posts'],
-          slug: 'posts',
         },
       ],
       globals: [
         {
+          slug: 'site-settings',
           disabled: true,
           revalidateAllOnChange: true,
-          slug: 'site-settings',
         },
       ],
       revalidatePath: () => undefined,
@@ -121,8 +122,8 @@ describe('payloadIsr runtime safeguards', () => {
     const plugin = payloadIsr({
       collections: [
         {
-          pathResolver: () => ['/posts'],
           slug: 'posts',
+          pathResolver: () => ['/posts'],
           tagResolver: () => ['posts'],
         },
       ],
@@ -170,9 +171,9 @@ describe('payloadIsr runtime safeguards', () => {
       const plugin = payloadIsr({
         collections: [
           {
+            slug: 'posts',
             pathResolver: () => ['/posts/first-post'],
             probeURL: () => '/posts/first-post',
-            slug: 'posts',
           },
         ],
         fullRebuild: {
@@ -202,10 +203,10 @@ describe('payloadIsr runtime safeguards', () => {
       expect(fetchSpy).not.toHaveBeenCalled()
       expect(trigger).not.toHaveBeenCalled()
       expect(revalidatePath).toHaveBeenCalledWith('/posts/first-post', {
+        slug: 'posts',
         mode: 'path',
         reason: 'collection-update',
         scope: 'collection',
-        slug: 'posts',
       })
     } finally {
       globalThis.fetch = originalFetch

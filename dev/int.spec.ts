@@ -34,9 +34,9 @@ describe('Plugin integration tests', () => {
     const post = await payload.create({
       collection: 'posts',
       data: {
-        title: 'First post',
         slug: 'first-post',
         isPublished: true,
+        title: 'First post',
       },
     })
 
@@ -66,9 +66,9 @@ describe('Plugin integration tests', () => {
     await payload.create({
       collection: 'posts',
       data: {
-        title: 'Draft-like post',
         slug: 'draft-like-post',
         isPublished: false,
+        title: 'Draft-like post',
       },
     })
 
@@ -91,20 +91,20 @@ describe('Plugin integration tests', () => {
     const post = await payload.create({
       collection: 'posts',
       data: {
-        title: 'Second post',
         slug: 'second-post',
         isPublished: true,
+        title: 'Second post',
       },
     })
 
     clearRevalidationEvents()
 
     await payload.update({
+      id: post.id,
       collection: 'posts',
       data: {
         isPublished: false,
       },
-      id: post.id,
     })
 
     const pathEvents = getPathRevalidationEvents()
@@ -133,17 +133,17 @@ describe('Plugin integration tests', () => {
     const post = await payload.create({
       collection: 'posts',
       data: {
-        title: 'Third post',
         slug: 'third-post',
         isPublished: true,
+        title: 'Third post',
       },
     })
 
     clearRevalidationEvents()
 
     await payload.delete({
-      collection: 'posts',
       id: post.id,
+      collection: 'posts',
     })
 
     const pathEvents = getPathRevalidationEvents()
@@ -172,20 +172,20 @@ describe('Plugin integration tests', () => {
     const post = await payload.create({
       collection: 'posts',
       data: {
-        title: 'Renamable post',
         slug: 'renamable-post',
         isPublished: true,
+        title: 'Renamable post',
       },
     })
 
     clearRevalidationEvents()
 
     await payload.update({
+      id: post.id,
       collection: 'posts',
       data: {
         slug: 'renamed-post',
       },
-      id: post.id,
     })
 
     const pathEvents = getPathRevalidationEvents()
@@ -205,9 +205,9 @@ describe('Plugin integration tests', () => {
     const post = await payload.create({
       collection: 'posts',
       data: {
-        title: 'Missing route post',
         slug: 'missing-route-post',
         isPublished: true,
+        title: 'Missing route post',
       },
     })
 

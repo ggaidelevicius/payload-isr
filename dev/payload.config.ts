@@ -193,7 +193,7 @@ const buildConfigWithMemoryDB = async () => {
           {
             slug: 'posts',
             onDelete: {
-              pathResolver: ({ doc, id }) =>
+              pathResolver: ({ id, doc }) =>
                 getPostRevalidationPaths({
                   id,
                   slug: typeof doc.slug === 'string' ? doc.slug : null,

@@ -40,8 +40,8 @@ const DEFAULT_COLLECTION_OPERATIONS: ReadonlyArray<CollectionAfterOperationArgs[
 ]
 
 type DebugTraceState = {
-  seenMissingRevalidateTagWarnings: Set<string>
   seenConfigEvents: Set<string>
+  seenMissingRevalidateTagWarnings: Set<string>
 }
 
 const getDebugTraceState = (): DebugTraceState => {
@@ -51,8 +51,8 @@ const getDebugTraceState = (): DebugTraceState => {
 
   if (!stateHost.__payloadIsrDebugTraceState) {
     stateHost.__payloadIsrDebugTraceState = {
-      seenMissingRevalidateTagWarnings: new Set<string>(),
       seenConfigEvents: new Set<string>(),
+      seenMissingRevalidateTagWarnings: new Set<string>(),
     }
   }
 
@@ -184,9 +184,9 @@ const normalizeProbeURL = (
     )
     logDebugTrace(options, 'fullRebuild.skip.invalidProbeURL', {
       slug: args.slug,
+      probeURL: args.probeURL,
       reason: args.reason,
       scope: args.scope,
-      probeURL: args.probeURL,
     })
     return null
   }
@@ -417,8 +417,8 @@ const revalidatePaths = async (
   logDebugTrace(options, 'revalidate.paths.resolved', {
     slug: args.slug,
     mode: args.mode,
-    normalizedCount: normalizedPaths.length,
     normalizedAbsolutePaths,
+    normalizedCount: normalizedPaths.length,
     normalizedPaths,
     rawCount: args.paths.length,
     reason: args.reason,
