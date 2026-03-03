@@ -102,6 +102,21 @@ const logDebugTrace = (
   })
 }
 
+const resolveDebugAbsolutePath = (
+  path: string,
+  debugURLOrigin: string | undefined,
+): null | string => {
+  if (!debugURLOrigin || !path.startsWith('/')) {
+    return null
+  }
+
+  try {
+    return new URL(path, debugURLOrigin).toString()
+  } catch {
+    return null
+  }
+}
+
 const findDuplicateSlugs = <TTarget extends { slug: string }>(targets: TTarget[]): string[] => {
   const counts = new Map<string, number>()
 
@@ -327,10 +342,14 @@ const revalidatePaths = async (
   },
 ): Promise<void> => {
   const normalizedPaths = normalizePaths(args.paths)
+  const normalizedAbsolutePaths = normalizedPaths
+    .map((path) => resolveDebugAbsolutePath(path, options.debugURLOrigin))
+    .filter((path): path is string => Boolean(path))
   logDebugTrace(options, 'revalidate.paths.resolved', {
     slug: args.slug,
     mode: args.mode,
     normalizedCount: normalizedPaths.length,
+    normalizedAbsolutePaths,
     normalizedPaths,
     rawCount: args.paths.length,
     reason: args.reason,
@@ -338,13 +357,20 @@ const revalidatePaths = async (
   })
 
   for (const path of normalizedPaths) {
+    const absolutePath = resolveDebugAbsolutePath(path, options.debugURLOrigin)
     logDebugTrace(options, 'revalidate.path.dispatch', {
       slug: args.slug,
+      absolutePath,
       mode: args.mode,
       path,
       reason: args.reason,
       scope: args.scope,
     })
+    if (options.debug && options.logger?.info) {
+      options.logger.info(
+        `[payload-isr] revalidatePath dispatch slug=${args.slug} reason=${args.reason} scope=${args.scope} mode=${args.mode} path=${path}${absolutePath ? ` absolutePath=${absolutePath}` : ''}`,
+      )
+    }
     await options.revalidatePath(path, {
       slug: args.slug,
       mode: args.mode,

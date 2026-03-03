@@ -24,6 +24,7 @@ export default buildConfig({
   plugins: [
     payloadIsr({
       debug: true,
+      debugURLOrigin: process.env.PUBLIC_APP_URL,
       logger: createPayloadIsrLogger(),
       revalidatePath: (path, meta) => {
         if (meta.mode === 'site') {
@@ -73,6 +74,7 @@ export default buildConfig({
   - global: `revalidateAllOnChange: true` or one of `pathResolver`, `tagResolver`, `probeURL`
 - `disabled?: boolean`
 - `debug?: boolean` emits structured `logger.info` trace events for hook/guard/branch decisions
+- `debugURLOrigin?: string` optional base URL used to log absolute revalidated URLs in debug mode
 - `revalidatePath(path, meta)` (required)
 - `revalidateTag?(tag, meta)` (optional)
 - `collections?: CollectionISRTarget[]`
@@ -83,6 +85,8 @@ export default buildConfig({
 For quick setup:
 - use `debug: true`
 - use `logger: createPayloadIsrLogger()`
+- `createPayloadIsrLogger()` suppresses noisy `config.*` debug-trace events by default
+- to include config events, pass `createPayloadIsrLogger({ includeConfigDebugEvents: true })`
 
 ### Collection target
 

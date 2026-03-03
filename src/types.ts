@@ -174,6 +174,7 @@ export interface LoggerLike {
 export type PayloadIsrConfig = {
   collections?: AnyCollectionISRTarget[]
   debug?: boolean
+  debugURLOrigin?: string
   disabled?: boolean
   fullRebuild?: FullRebuildConfig
   globals?: AnyGlobalISRTarget[]

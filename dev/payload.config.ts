@@ -207,6 +207,7 @@ const buildConfigWithMemoryDB = async () => {
           },
         ],
         debug: isrDebugEnabled,
+        debugURLOrigin: isrProbeOrigin,
         fullRebuild: {
           enabled: isrFullRebuildEnabled,
           shouldTrigger: (context) => {
