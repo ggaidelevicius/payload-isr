@@ -77,6 +77,44 @@ const toAbsoluteDevURL = (pathname: string): string => {
   return new URL(pathname, isrProbeOrigin).toString()
 }
 
+type PostRouteDoc = {
+  id: number | string
+  slug?: null | string
+}
+
+const getPostSlugSegment = (doc: PostRouteDoc): null | string => {
+  if (typeof doc.slug !== 'string') {
+    return null
+  }
+
+  const slug = doc.slug.trim()
+  return slug.length > 0 ? slug : null
+}
+
+const getPostFriendlyPath = (doc: PostRouteDoc): null | string => {
+  const slug = getPostSlugSegment(doc)
+  return slug ? `/posts/${slug}` : null
+}
+
+const getPostIDPath = (doc: Pick<PostRouteDoc, 'id'>): string => {
+  return `/posts/${String(doc.id)}`
+}
+
+const getPostRevalidationPaths = (doc: PostRouteDoc): string[] => {
+  const paths = [getPostIDPath(doc), '/posts']
+  const friendlyPath = getPostFriendlyPath(doc)
+
+  if (friendlyPath) {
+    paths.unshift(friendlyPath)
+  }
+
+  return paths
+}
+
+const getPostProbeURL = (doc: PostRouteDoc): string => {
+  return toAbsoluteDevURL(getPostFriendlyPath(doc) ?? getPostIDPath(doc))
+}
+
 const isPayloadGenerateCommand = process.argv.some(
   (arg) => arg === 'generate:types' || arg === 'generate:importmap',
 )
@@ -155,40 +193,23 @@ const buildConfigWithMemoryDB = async () => {
           {
             slug: 'posts',
             onDelete: {
-              pathResolver: ({ id }) => [`/posts/${id}`, '/posts'],
+              pathResolver: ({ doc, id }) =>
+                getPostRevalidationPaths({
+                  id,
+                  slug: typeof doc.slug === 'string' ? doc.slug : null,
+                }),
               tagResolver: ({ id }) => ['posts', `post:${id}`],
             },
-            pathResolver: ({ result }) => [
-              `/posts/${result.slug ?? result.id}`,
-              '/posts',
-            ],
+            pathResolver: ({ result }) =>
+              getPostRevalidationPaths({
+                id: result.id,
+                slug: typeof result.slug === 'string' ? result.slug : null,
+              }),
             probeURL: ({ result }) =>
-              toAbsoluteDevURL(`/posts/${result.slug ?? result.id}`),
-            referencePathResolver: (args) => {
-              if (args.operation !== 'update' && args.operation !== 'updateByID') {
-                return []
-              }
-
-              const previousSlug =
-                'previousDoc' in args &&
-                typeof args.previousDoc === 'object' &&
-                args.previousDoc !== null &&
-                'slug' in args.previousDoc &&
-                typeof args.previousDoc.slug === 'string'
-                  ? args.previousDoc.slug
-                  : null
-              const currentSlug =
-                typeof args.result.slug === 'string' ? args.result.slug : null
-
-              if (
-                !previousSlug ||
-                previousSlug === currentSlug
-              ) {
-                return []
-              }
-
-              return [`/posts/${previousSlug}`]
-            },
+              getPostProbeURL({
+                id: result.id,
+                slug: typeof result.slug === 'string' ? result.slug : null,
+              }),
             shouldHandle: ({ result }) => Boolean(result.isPublished),
             tagResolver: ({ result }) => ['posts', `post:${result.id}`],
             unpublish: {

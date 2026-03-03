@@ -114,6 +114,33 @@ Note:
 - `shouldHandle?` custom gate for publish logic
 - `probeURL?` URL to check before deciding full rebuild fallback
 
+## Route contract alignment
+
+Define a single route contract per content type and keep all ISR inputs aligned with it.
+
+- `pathResolver` should include the path keys your app actually caches/serves.
+- `probeURL` should probe the user-facing URL you expect to exist after deploy.
+- if you support both internal ID routes and friendly slug routes, revalidate both paths.
+- when friendly URL sources can change (title/slug/path segment), use `referencePathResolver` if your resolver can derive the previous URL (for example from stored history or another lookup).
+
+Example pattern:
+
+```ts
+const getPostPaths = (doc: { id: string | number; slug?: null | string }) => {
+  const idPath = `/posts/${String(doc.id)}`
+  const slugPath = typeof doc.slug === 'string' && doc.slug.trim() ? `/posts/${doc.slug.trim()}` : null
+  return [slugPath, idPath, '/posts'].filter(Boolean) as string[]
+}
+
+const getPostProbeURL = (doc: { id: string | number; slug?: null | string }) =>
+  new URL(
+    typeof doc.slug === 'string' && doc.slug.trim()
+      ? `/posts/${doc.slug.trim()}`
+      : `/posts/${String(doc.id)}`,
+    process.env.PUBLIC_APP_URL,
+  ).toString()
+```
+
 ## About fullRebuild
 
 `fullRebuild` is a fallback for cases where path/tag-level invalidation can miss newly valid routes.
