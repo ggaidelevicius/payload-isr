@@ -98,14 +98,27 @@ export interface CollectionUnpublishConfig<TSlug extends CollectionSlug = Collec
   enabled?: boolean
   matcher?: (args: CollectionAfterOperationArgs<TSlug>) => MaybePromise<boolean>
   pathResolver?: (args: CollectionAfterOperationArgs<TSlug>) => MaybePromise<string[]>
+  /**
+   * Additional paths resolved alongside pathResolver, not instead of it.
+   * Useful for invalidating parent/index routes on unpublish.
+   */
   referencePathResolver?: (args: CollectionAfterOperationArgs<TSlug>) => MaybePromise<string[]>
+  /**
+   * Additional tags resolved alongside tagResolver, not instead of it.
+   */
   referenceTagResolver?: (args: CollectionAfterOperationArgs<TSlug>) => MaybePromise<string[]>
   tagResolver?: (args: CollectionAfterOperationArgs<TSlug>) => MaybePromise<string[]>
 }
 
 export interface CollectionDeleteConfig<TSlug extends CollectionSlug = CollectionSlug> {
   pathResolver?: (args: CollectionAfterDeleteArgs<TSlug>) => MaybePromise<string[]>
+  /**
+   * Additional paths resolved alongside pathResolver, not instead of it.
+   */
   referencePathResolver?: (args: CollectionAfterDeleteArgs<TSlug>) => MaybePromise<string[]>
+  /**
+   * Additional tags resolved alongside tagResolver, not instead of it.
+   */
   referenceTagResolver?: (args: CollectionAfterDeleteArgs<TSlug>) => MaybePromise<string[]>
   tagResolver?: (args: CollectionAfterDeleteArgs<TSlug>) => MaybePromise<string[]>
 }
@@ -113,7 +126,14 @@ export interface CollectionDeleteConfig<TSlug extends CollectionSlug = Collectio
 type CollectionUpdateResolvers<TSlug extends CollectionSlug> = {
   pathResolver?: (args: CollectionAfterOperationArgs<TSlug>) => MaybePromise<string[]>
   probeURL?: (args: CollectionAfterOperationArgs<TSlug>) => MaybePromise<null | string | undefined>
+  /**
+   * Additional paths resolved alongside pathResolver, not instead of it.
+   * Useful for parent/listing pages that depend on this document.
+   */
   referencePathResolver?: (args: CollectionAfterOperationArgs<TSlug>) => MaybePromise<string[]>
+  /**
+   * Additional tags resolved alongside tagResolver, not instead of it.
+   */
   referenceTagResolver?: (args: CollectionAfterOperationArgs<TSlug>) => MaybePromise<string[]>
   tagResolver?: (args: CollectionAfterOperationArgs<TSlug>) => MaybePromise<string[]>
 }
@@ -124,7 +144,8 @@ type CollectionUpdateStrategy<TSlug extends CollectionSlug> = RequireAtLeastOne<
 >
 
 export type CollectionISRTarget<TSlug extends CollectionSlug = CollectionSlug> =
-  {
+{
+  disabled?: boolean
   onDelete?: CollectionDeleteConfig<TSlug>
   operations?: ReadonlyArray<CollectionAfterOperationArgs<TSlug>['operation']>
   shouldHandle?: (args: CollectionAfterOperationArgs<TSlug>) => MaybePromise<boolean>
@@ -153,6 +174,7 @@ type GlobalUpdateStrategy<TSlug extends GlobalSlug> =
   | GlobalTargetSiteStrategy<TSlug>
 
 export type GlobalISRTarget<TSlug extends GlobalSlug = GlobalSlug> = {
+  disabled?: boolean
   shouldHandle?: (args: GlobalAfterChangeArgs<TSlug>) => MaybePromise<boolean>
   slug: TSlug
 } & GlobalUpdateStrategy<TSlug>

@@ -1,16 +1,57 @@
 # @ggaidelevicius/payload-isr
 
-Payload CMS plugin for ISR-style path and tag revalidation, with optional full rebuild fallback.
+Payload CMS plugin that revalidates your Next.js cache when documents are published, updated, unpublished, or deleted — by path, by cache tag, or by triggering a full rebuild when route-level invalidation isn't enough.
 
-Built from the official Payload plugin template (`create-payload-app --template plugin`) and adapted for publish/unpublish/delete revalidation workflows.
+## Requirements
+
+- Payload `^3.37.0`
+- Node `^18.20.2 || >=20.9.0`
+- Next.js is the typical target but the plugin works with any revalidation callbacks
 
 ## Install
 
 ```bash
 pnpm add @ggaidelevicius/payload-isr
+# or
+npm install @ggaidelevicius/payload-isr
 ```
 
-## Usage
+## How it works
+
+The plugin registers Payload `afterOperation` and `afterChange` hooks on whichever collections and globals you configure. When a hook fires:
+
+1. **Publish check** — `shouldHandle` decides whether the document should trigger revalidation (default: document has no `_status` field, or `_status === 'published'`)
+2. **Unpublish check** — if an update sets a document from published to draft, unpublish-specific resolvers fire instead of update resolvers
+3. **Probe** — if `probeURL` is configured and `fullRebuild` is enabled, the plugin fetches that URL; a `404` triggers the full rebuild path and skips path/tag revalidation
+4. **Revalidate** — resolved paths are passed to your `revalidatePath` callback; resolved tags are passed to your `revalidateTag` callback
+
+Delete revalidation is opt-in via `onDelete` on each collection target. The plugin warns at startup when a collection has update resolvers but no `onDelete` strategy.
+
+## Minimal setup
+
+The smallest valid configuration — no tags, no full rebuild, one collection:
+
+```ts
+import { buildConfig } from 'payload'
+import { payloadIsr } from '@ggaidelevicius/payload-isr'
+import { revalidatePath } from 'next/cache'
+
+export default buildConfig({
+  plugins: [
+    payloadIsr({
+      revalidatePath: (path) => revalidatePath(path),
+      collections: [
+        {
+          slug: 'posts',
+          pathResolver: ({ result }) => [`/posts/${result.slug}`, '/posts'],
+        },
+      ],
+    }),
+  ],
+})
+```
+
+## Full example
 
 ```ts
 import { buildConfig } from 'payload'
@@ -23,38 +64,63 @@ import {
 export default buildConfig({
   plugins: [
     payloadIsr({
+      // Emit structured debug traces for every hook/guard/branch decision.
       debug: true,
+      // Prefix relative paths in debug output with this origin so URLs are clickable.
       debugURLOrigin: process.env.PUBLIC_APP_URL,
+      // Logger that filters noisy config-level traces by default.
       logger: createPayloadIsrLogger(),
+
+      // Called once per resolved path.
+      // meta.mode is 'site' when a global uses revalidateAllOnChange — use
+      // Next.js 'layout' scope in that case to revalidate the full layout tree.
       revalidatePath: (path, meta) => {
         if (meta.mode === 'site') {
           return nextRevalidatePath(path, 'layout')
         }
-
         return nextRevalidatePath(path)
       },
+
+      // Optional. Called once per resolved tag. Omit if you don't use cache tags.
       revalidateTag: (tag) => nextRevalidateTag(tag),
+
       collections: [
         {
           slug: 'posts',
+
+          // Paths to revalidate when a post is published or updated.
           pathResolver: ({ result }) => [`/posts/${result.slug}`, '/posts'],
-          probeURL: ({ result }) => `https://www.example.com/posts/${result.slug}`,
+
+          // URL to probe before deciding whether a full rebuild is needed.
+          // If this returns 404, fullRebuild.trigger() is called instead of revalidating paths/tags.
+          probeURL: ({ result }) => `${process.env.PUBLIC_APP_URL}/posts/${result.slug}`,
+
+          // Cache tags to invalidate.
           tagResolver: ({ result }) => ['posts', `post:${result.id}`],
+
+          // onDelete is optional, but without it this target won't revalidate on deletes.
+          // The plugin emits a startup warning for this misconfiguration.
           onDelete: {
             pathResolver: ({ id }) => [`/posts/${id}`, '/posts'],
             tagResolver: ({ id }) => ['posts', `post:${id}`],
           },
         },
       ],
+
       globals: [
         {
           slug: 'site-settings',
+          // Revalidate the entire site (calls revalidatePath('/', 'layout') via meta.mode === 'site').
+          // Cannot be combined with pathResolver on the same target.
           revalidateAllOnChange: true,
           tagResolver: () => ['site-settings', 'global'],
         },
       ],
+
       fullRebuild: {
+        // Disable in development to avoid accidentally triggering deploys.
         enabled: process.env.NODE_ENV === 'production',
+        // Fires when a probeURL returns 404 (the default shouldTrigger condition).
         trigger: async () => {
           await fetch(process.env.REBUILD_WEBHOOK_URL!, { method: 'POST' })
         },
@@ -66,64 +132,215 @@ export default buildConfig({
 
 ## Plugin options
 
-`payloadIsr({ ... })`
+### Top-level (`payloadIsr({ ... })`)
 
-- `collections` / `globals` callback args are inferred from each target `slug` (using Payload generated types), so invalid field access is caught at compile time.
-- collection/global targets require at least one update strategy at type level:
-  - collection: one of `pathResolver`, `tagResolver`, `referencePathResolver`, `referenceTagResolver`, `probeURL`
-  - global: `revalidateAllOnChange: true` or one of `pathResolver`, `tagResolver`, `probeURL`
-- `disabled?: boolean`
-- `debug?: boolean` emits structured `logger.info` trace events for hook/guard/branch decisions
-- `debugURLOrigin?: string` optional base URL used to log absolute revalidated URLs in debug mode
-- `revalidatePath(path, meta)` (required)
-- `revalidateTag?(tag, meta)` (optional)
-- `collections?: CollectionISRTarget[]`
-- `globals?: GlobalISRTarget[]`
-- `fullRebuild?: { enabled?, shouldTrigger?, trigger }`
-- `logger?: { warn, error, info? }`
+| Option | Type | Required | Description |
+|---|---|---|---|
+| `revalidatePath` | `(path, meta) => void \| Promise<void>` | Yes | Called for each resolved path. See [Revalidation metadata](#revalidation-metadata). |
+| `revalidateTag` | `(tag, meta?) => void \| Promise<void>` | No | Called for each resolved tag. Omit if you don't use cache tags. |
+| `collections` | `CollectionISRTarget[]` | No | Collection revalidation targets. |
+| `globals` | `GlobalISRTarget[]` | No | Global revalidation targets. |
+| `fullRebuild` | `FullRebuildConfig` | No | Full rebuild fallback. See [Full rebuild fallback](#full-rebuild-fallback). |
+| `logger` | `{ error, warn, info? }` | No | Custom logger. Defaults to `console`. Use `createPayloadIsrLogger()` for structured output with built-in filtering. |
+| `debug` | `boolean` | No | Emit structured trace events via `logger.info` for every hook, guard, and branch decision. |
+| `debugURLOrigin` | `string` | No | Base URL prepended to relative paths in debug output, making logged paths absolute and clickable. |
+| `disabled` | `boolean` | No | Disable the plugin entirely without removing it from config. |
 
-For quick setup:
-- use `debug: true`
-- use `logger: createPayloadIsrLogger()`
-- `createPayloadIsrLogger()` suppresses noisy `config.*` debug-trace events by default
-- to include config events, pass `createPayloadIsrLogger({ includeConfigDebugEvents: true })`
+**TypeScript note:** callback args in `collections` and `globals` are inferred from each target's `slug` using Payload's generated types. Invalid field access is caught at compile time. Each target requires at least one revalidation strategy at the type level — the compiler will error if a target has no resolver.
 
 ### Collection target
 
-- `slug` (required)
-- `pathResolver?` revalidate route paths
-- `tagResolver?` revalidate cache tags
-- `operations?` default: `['create', 'update', 'updateByID']`
-- `shouldHandle?` custom gate for publish logic
-- `referencePathResolver?` for extra related paths
-- `referenceTagResolver?` for extra related tags
-- `probeURL?` URL to check before deciding full rebuild fallback
-- `unpublish?` override unpublish matcher/path/tag behavior
-- `onDelete?` add delete path/tag revalidation behavior
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `slug` | `string` | — | Collection slug. Must match your Payload collection. |
+| `disabled` | `boolean` | `false` | Skip this target without removing it from config. |
+| `pathResolver` | `(args) => string[]` | — | Returns paths to revalidate when a document is published or updated. |
+| `tagResolver` | `(args) => string[]` | — | Returns cache tags to invalidate. |
+| `referencePathResolver` | `(args) => string[]` | — | Additional related paths (parent pages, index pages, etc.). Resolved alongside `pathResolver`, not instead of it. |
+| `referenceTagResolver` | `(args) => string[]` | — | Additional related tags. Resolved alongside `tagResolver`. |
+| `probeURL` | `(args) => string` | — | URL to fetch before triggering full rebuild. Required for full rebuild to ever fire on this target. |
+| `operations` | `string[]` | `['create', 'update', 'updateByID']` | Which Payload operations trigger this target. |
+| `shouldHandle` | `(args) => boolean` | Checks `_status === 'published'` (or no `_status` field) | Custom gate. Return `false` to skip revalidation for this operation. |
+| `unpublish` | `UnpublishConfig` | — | Override unpublish detection and/or unpublish-specific path/tag resolvers. |
+| `onDelete` | `OnDeleteConfig` | — | Opt-in delete revalidation. Without this, deletes are skipped for this target and a startup warning is emitted. |
 
-Note:
-- If you do not use Payload drafts, avoid `_status` checks in `shouldHandle`; there may be no status field to inspect.
+**At least one of** `pathResolver`, `tagResolver`, `referencePathResolver`, `referenceTagResolver`, or `probeURL` is required at the type level.
 
 ### Global target
 
-- `slug` (required)
-- `revalidateAllOnChange?: boolean` use site-wide invalidation mode, no per-page path mapping required
-- `revalidateAllPath?: string` defaults to `'/'` when `revalidateAllOnChange` is enabled
-- `pathResolver?` targeted path strategy when `revalidateAllOnChange` is not enabled
-- `tagResolver?` revalidate cache tags for global changes
-- `shouldHandle?` custom gate for publish logic
-- `probeURL?` URL to check before deciding full rebuild fallback
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `slug` | `string` | — | Global slug. Must match your Payload global. |
+| `disabled` | `boolean` | `false` | Skip this target without removing it from config. |
+| `revalidateAllOnChange` | `boolean` | — | Revalidate the entire site on every change. Passes `meta.mode === 'site'` to `revalidatePath`. Cannot be combined with `pathResolver`. |
+| `revalidateAllPath` | `string` | `'/'` | Path passed to `revalidatePath` when `revalidateAllOnChange` is enabled. Must be absolute. |
+| `pathResolver` | `(args) => string[]` | — | Returns targeted paths. Use this when `revalidateAllOnChange` is too broad. |
+| `tagResolver` | `(args) => string[]` | — | Returns cache tags to invalidate. |
+| `shouldHandle` | `(args) => boolean` | Checks `_status === 'published'` (or no `_status` field) | Custom gate. |
+| `probeURL` | `(args) => string` | — | URL to probe before full rebuild decision. |
+
+**At least one strategy required:** `revalidateAllOnChange: true`, or at least one of `pathResolver`, `tagResolver`, `probeURL`.
+
+### Full rebuild config
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | `boolean` | — | Whether full rebuild is active. Recommended: `process.env.NODE_ENV === 'production'`. |
+| `trigger` | `(context) => void \| Promise<void>` | — | Required. What to call when a rebuild is triggered. |
+| `shouldTrigger` | `(context) => boolean` | `context.probeStatus === 404` | Override the condition for triggering. |
+
+`trigger` receives a `FullRebuildContext` with: `probeStatus`, `probeURL`, `reason`, `scope`, `slug`.
+
+## Revalidation metadata
+
+Both `revalidatePath` and `revalidateTag` receive a `meta` argument describing why revalidation is happening.
+
+### `revalidatePath(path, meta)`
+
+```ts
+meta: {
+  mode: 'path' | 'site'  // 'site' only for globals with revalidateAllOnChange
+  reason: RevalidationReason
+  scope: 'collection' | 'global'
+  slug: string
+}
+```
+
+The `mode` field is the primary reason to branch on `meta` — Next.js requires a `'layout'` scope argument when you want to invalidate the full layout tree:
+
+```ts
+revalidatePath: (path, meta) => {
+  if (meta.mode === 'site') {
+    return nextRevalidatePath(path, 'layout')
+  }
+  return nextRevalidatePath(path)
+},
+```
+
+### `revalidateTag(tag, meta?)`
+
+```ts
+meta?: {
+  reason: RevalidationReason
+  scope: 'collection' | 'global'
+  slug: string
+}
+```
+
+### Revalidation reasons
+
+| Reason | When |
+|---|---|
+| `'collection-update'` | Collection create or update operation |
+| `'collection-unpublish'` | Update that transitions a document from published to draft |
+| `'collection-delete'` | Collection delete operation |
+| `'global-update'` | Global doc change |
+
+## Default behaviors
+
+These are the defaults to be aware of — getting them wrong is a common source of missed revalidation:
+
+**`shouldHandle`** — defaults to `doc._status === 'published'` or, if the document has no `_status` field at all, `true`. If you don't use Payload drafts, every publish/update will pass the default guard automatically. If you do use drafts, only published docs trigger revalidation by default. Override with a custom `shouldHandle` to change this.
+
+**`operations`** — defaults to `['create', 'update', 'updateByID']`. Custom Payload operations are not included. Override if you need to respond to additional operation types.
+
+**`onDelete`** — not configured by default. Deletes are skipped without it. The plugin warns at startup for collection targets that define update resolvers but no `onDelete`.
+
+**`revalidateAllPath`** — defaults to `'/'` when `revalidateAllOnChange: true`.
+
+**`fullRebuild.shouldTrigger`** — defaults to `context.probeStatus === 404`. Override to trigger on other status codes or custom logic.
+
+**`fullRebuild` without `probeURL`** — if `fullRebuild` is enabled but no target has a `probeURL`, no probe ever runs and the rebuild trigger is never reached. The plugin emits a warning at startup.
+
+**Invalid `probeURL` values** — if a resolver returns an empty, relative, or non-HTTP URL, the plugin warns and skips probing for that operation.
+
+## Unpublish detection
+
+When a collection update is detected as an unpublish (a document transitioning from published to draft), the plugin uses unpublish-specific resolvers if provided, falling back to the main resolvers.
+
+Default unpublish matcher: the operation must be `updateByID` and request data must include `_status: 'draft'`. Extra fields are allowed.
+
+If your app uses a different field to control publish state (e.g. `isPublished: boolean`), provide a custom `unpublish.matcher`:
+
+```ts
+{
+  slug: 'posts',
+  pathResolver: ({ result }) => [`/posts/${result.slug}`, '/posts'],
+  unpublish: {
+    // Detect your custom unpublish pattern
+    matcher: ({ args, operation }) => {
+      const data = args.req.data as Record<string, unknown>
+      return operation === 'updateByID' && data.isPublished === false && Object.keys(data).length === 1
+    },
+    // Optional: different paths/tags on unpublish (falls back to main resolvers if omitted)
+    pathResolver: ({ result }) => [`/posts/${result.slug}`, '/posts'],
+    tagResolver: ({ result }) => ['posts', `post:${result.id}`],
+  },
+}
+```
+
+## Delete revalidation
+
+Deletes do not trigger revalidation unless `onDelete` is configured on the target. The plugin warns at startup when `onDelete` is missing. The delete hook receives the deleted document and its ID:
+
+```ts
+{
+  slug: 'posts',
+  pathResolver: ({ result }) => [`/posts/${result.slug}`, '/posts'],
+  onDelete: {
+    pathResolver: ({ doc, id }) => [
+      // doc is the deleted document — use its fields if available
+      typeof doc.slug === 'string' ? `/posts/${doc.slug}` : `/posts/${id}`,
+      '/posts',
+    ],
+    tagResolver: ({ id }) => ['posts', `post:${id}`],
+  },
+}
+```
+
+## Full rebuild fallback
+
+`fullRebuild` is a fallback for situations where path/tag invalidation misses newly valid routes — for example, when a slug changes and the new URL has never been cached, or when catch-all routes return `404` until a new build is deployed.
+
+When to enable it:
+- Slug or route shape changes that create a URL not yet present in the current deployment
+- Catch-all or nested routing where newly published content returns `404` until a rebuild
+- CDN or edge cache scenarios where route/tag revalidation alone is insufficient
+
+How it works:
+1. `fullRebuild.enabled` must be `true`
+2. The target must have a `probeURL` resolver — without it, no probe runs
+3. Plugin fetches `probeURL` after a publish/update
+4. If `fullRebuild.shouldTrigger(context)` returns `true` (default: `probeStatus === 404`), `trigger()` is called
+5. Path/tag revalidation is skipped when a rebuild triggers
+
+```ts
+fullRebuild: {
+  enabled: process.env.NODE_ENV === 'production',
+  trigger: async (context) => {
+    // context: { probeStatus, probeURL, reason, scope, slug }
+    await fetch(process.env.REBUILD_WEBHOOK_URL!, { method: 'POST' })
+  },
+}
+```
+
+Common `trigger` implementations:
+- Generic HTTP deploy webhook
+- CI/CD provider API (GitHub Actions, GitLab CI, CircleCI)
+- Hosted platform rebuild endpoint (Vercel, Netlify, Cloudflare)
+- Internal queue or job dispatcher
 
 ## Route contract alignment
 
-Define a single route contract per content type and keep all ISR inputs aligned with it.
+All ISR inputs for a content type should map to the same routing contract your app actually serves. Misalignment means revalidating paths that aren't cached, or probing URLs that don't match what's live.
 
-- `pathResolver` should include the path keys your app actually caches/serves.
-- `probeURL` should probe the user-facing URL you expect to exist after deploy.
-- if you support both internal ID routes and friendly slug routes, revalidate both paths.
-- when friendly URL sources can change (title/slug/path segment), use `referencePathResolver` if your resolver can derive the previous URL (for example from stored history or another lookup).
+Rules of thumb:
+- `pathResolver` should return the paths your app actually caches and serves
+- `probeURL` should be the user-facing URL you expect to exist after a successful deploy
+- If your app serves both `/posts/[id]` and `/posts/[slug]`, revalidate both
+- If a slug can change, `referencePathResolver` can revalidate the previous URL if your resolver can derive it (e.g. from stored history)
 
-Example pattern:
+Example — helper functions that stay consistent across resolvers:
 
 ```ts
 const getPostPaths = (doc: { id: string | number; slug?: null | string }) => {
@@ -139,51 +356,76 @@ const getPostProbeURL = (doc: { id: string | number; slug?: null | string }) =>
       : `/posts/${String(doc.id)}`,
     process.env.PUBLIC_APP_URL,
   ).toString()
+
+// Use in config:
+{
+  slug: 'posts',
+  pathResolver: ({ result }) => getPostPaths(result),
+  probeURL: ({ result }) => getPostProbeURL(result),
+  onDelete: {
+    pathResolver: ({ doc, id }) => getPostPaths({ id, slug: doc.slug }),
+  },
+}
 ```
 
-## About fullRebuild
+## Debug and logging
 
-`fullRebuild` is a fallback for cases where path/tag-level invalidation can miss newly valid routes.
+**Enable debug traces:**
 
-Common cases where enabling it helps:
-- slug or route shape changes that create a new URL not yet present in the current deployment
-- catch-all or nested routing where probing reveals the target route returns `404`
-- CDN or edge cache scenarios where route/tag revalidation is not sufficient
+```ts
+payloadIsr({
+  debug: true,
+  logger: createPayloadIsrLogger(),
+  // ...
+})
+```
 
-How it works:
-- plugin probes `probeURL` when configured on a target
-- by default, if probe status is `404`, plugin calls `fullRebuild.trigger(...)`
-- you can override this behavior with `fullRebuild.shouldTrigger(...)`
-- if `fullRebuild` is enabled but no targets provide `probeURL`, no probe runs and rebuild fallback is never reached
-- startup preflight warnings flag duplicate target slugs, missing strategies from dynamic config, tag resolvers without `revalidateTag`, and global `revalidateAllOnChange` conflicts.
+`createPayloadIsrLogger()` prefixes output with `[payload-isr]` and filters out noisy `config.*` setup traces by default. To include config-level events:
 
-Typical production setup:
-- set `enabled: process.env.NODE_ENV === 'production'`
-- set `trigger` to call your deployment mechanism
+```ts
+logger: createPayloadIsrLogger({ includeConfigDebugEvents: true })
+```
 
-Common `trigger` implementations:
-- generic HTTP deploy webhook
-- CI/CD provider API call (GitHub Actions, GitLab CI, CircleCI, etc.)
-- hosted platform rebuild endpoint (Vercel, Netlify, Cloudflare, etc.)
-- internal queue/job dispatcher in your own infrastructure
+Bring your own logger by passing any object with `error`, `warn`, and optionally `info` methods:
+
+```ts
+logger: {
+  error: (...args) => myLogger.error(...args),
+  warn: (...args) => myLogger.warn(...args),
+  info: (...args) => myLogger.info(...args),
+}
+```
+
+**Startup preflight warnings** — the plugin validates configuration at init and warns about:
+- Duplicate target slugs (hooks may fire multiple times)
+- Targets with no revalidation strategy
+- Collection targets missing delete strategy (`onDelete`)
+- Collection targets with `onDelete` configured but no resolvers inside it
+- `tagResolver` without a `revalidateTag` callback
+- `fullRebuild` enabled with no `probeURL` resolvers
+- `revalidateAllOnChange` and `pathResolver` on the same global target
+- Non-absolute `revalidateAllPath`
 
 ## Local development
 
 ```bash
-pnpm hooks:install
-pnpm dev
-pnpm test:int
-pnpm build
+pnpm hooks:install   # install commit-msg and other git hooks
+pnpm dev             # start the bundled dev app
+pnpm test:int        # run integration tests
+pnpm build           # build the plugin
 ```
 
-Debug helpers in the bundled `dev/` app:
-- set `PAYLOAD_ISR_DEBUG=1` to emit branch-level traces (enabled by default in `dev/payload.config.ts`)
-- set `PAYLOAD_ISR_DEBUG_CONFIG=1` to include noisy `config.*` trace events (disabled by default)
-- set `PAYLOAD_ISR_FULL_REBUILD=1` to enable full-rebuild fallback simulation in local dev
-- optional `PAYLOAD_ISR_PROBE_ORIGIN` (default: `http://127.0.0.1:3000`) controls probe URL base
-- inspect current telemetry via `GET /api/isr-debug`
-- clear telemetry via `DELETE /api/isr-debug`
+Environment variables for the bundled `dev/` app:
 
-Release commit marker guard:
-- commit messages with `(release...)` must use exactly one enum: `(release:patch)`, `(release:minor)`, or `(release:major)`
-- invalid values like `(release:path)` are rejected by the `commit-msg` hook
+| Variable | Default | Description |
+|---|---|---|
+| `PAYLOAD_ISR_DEBUG` | `1` | Emit branch-level debug traces |
+| `PAYLOAD_ISR_DEBUG_CONFIG` | off | Include noisy `config.*` trace events |
+| `PAYLOAD_ISR_FULL_REBUILD` | off | Enable full-rebuild fallback simulation |
+| `PAYLOAD_ISR_PROBE_ORIGIN` | `http://127.0.0.1:3000` | Base URL for probe requests |
+
+Dev API endpoints:
+- `GET /api/isr-debug` — inspect recorded revalidation telemetry
+- `DELETE /api/isr-debug` — clear recorded telemetry
+
+**Release commit marker guard:** commit messages containing `(release...)` must use exactly one of `(release:patch)`, `(release:minor)`, or `(release:major)`. Invalid values (e.g. `(release:path)`) are rejected by the `commit-msg` hook.

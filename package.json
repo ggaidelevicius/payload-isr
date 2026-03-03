@@ -32,7 +32,7 @@
     "lint": "eslint",
     "lint:fix": "eslint ./src --fix",
     "test": "pnpm test:int",
-    "test:int": "vitest dev/int.spec.ts",
+    "test:int": "vitest dev/int.spec.ts dev/plugin.spec.ts",
     "prepack": "pnpm clean && pnpm build",
     "prepublishOnly": "pnpm test",
     "pack:dry-run": "pnpm pack --dry-run",

@@ -40,6 +40,7 @@ const DEFAULT_COLLECTION_OPERATIONS: ReadonlyArray<CollectionAfterOperationArgs[
 ]
 
 type DebugTraceState = {
+  seenMissingRevalidateTagWarnings: Set<string>
   seenConfigEvents: Set<string>
 }
 
@@ -50,6 +51,7 @@ const getDebugTraceState = (): DebugTraceState => {
 
   if (!stateHost.__payloadIsrDebugTraceState) {
     stateHost.__payloadIsrDebugTraceState = {
+      seenMissingRevalidateTagWarnings: new Set<string>(),
       seenConfigEvents: new Set<string>(),
     }
   }
@@ -136,11 +138,19 @@ const hasCollectionUpdateStrategy = (target: AnyCollectionISRTarget): boolean =>
       target.probeURL,
   )
 
+const hasCollectionDeleteStrategy = (target: AnyCollectionISRTarget): boolean =>
+  Boolean(
+    target.onDelete?.pathResolver ||
+      target.onDelete?.tagResolver ||
+      target.onDelete?.referencePathResolver ||
+      target.onDelete?.referenceTagResolver,
+  )
+
 const hasGlobalUpdateStrategy = (target: AnyGlobalISRTarget): boolean =>
   target.revalidateAllOnChange === true || Boolean(target.pathResolver || target.tagResolver || target.probeURL)
 
 const usesTagResolvers = (options: PayloadIsrConfig): boolean =>
-  (options.collections ?? []).some(
+  (options.collections ?? []).filter((target) => target.disabled !== true).some(
     (target) =>
       Boolean(
         target.tagResolver ||
@@ -150,11 +160,43 @@ const usesTagResolvers = (options: PayloadIsrConfig): boolean =>
           target.unpublish?.tagResolver ||
           target.unpublish?.referenceTagResolver,
       ),
-  ) || (options.globals ?? []).some((target) => Boolean(target.tagResolver))
+  ) ||
+  (options.globals ?? []).filter((target) => target.disabled !== true).some((target) => Boolean(target.tagResolver))
+
+const normalizeProbeURL = (
+  options: PayloadIsrConfig,
+  args: {
+    probeURL: null | string | undefined
+    reason: RevalidationReason
+    scope: 'collection' | 'global'
+    slug: string
+  },
+): null | string => {
+  if (args.probeURL === null || typeof args.probeURL === 'undefined') {
+    return null
+  }
+
+  const probeURL = args.probeURL.trim()
+
+  if (probeURL.length === 0 || !/^https?:\/\//i.test(probeURL)) {
+    options.logger?.warn(
+      `[payload-isr] Probe URL resolver for "${args.slug}" returned "${args.probeURL}". Expected an absolute http(s) URL. Skipping full rebuild probe.`,
+    )
+    logDebugTrace(options, 'fullRebuild.skip.invalidProbeURL', {
+      slug: args.slug,
+      reason: args.reason,
+      scope: args.scope,
+      probeURL: args.probeURL,
+    })
+    return null
+  }
+
+  return probeURL
+}
 
 const validateRuntimeConfiguration = (options: PayloadIsrConfig): void => {
-  const collectionTargets = options.collections ?? []
-  const globalTargets = options.globals ?? []
+  const collectionTargets = (options.collections ?? []).filter((target) => target.disabled !== true)
+  const globalTargets = (options.globals ?? []).filter((target) => target.disabled !== true)
   logDebugTrace(options, 'config.validate.start', {
     collectionTargetCount: collectionTargets.length,
     fullRebuildConfigured: Boolean(options.fullRebuild),
@@ -189,6 +231,28 @@ const validateRuntimeConfiguration = (options: PayloadIsrConfig): void => {
       `[payload-isr] Collection targets missing update revalidation strategy (path/tag/probe): ${missingCollectionStrategy.join(
         ', ',
       )}.`,
+    )
+  }
+
+  const missingDeleteStrategy = collectionTargets
+    .filter((target) => hasCollectionUpdateStrategy(target) && !target.onDelete)
+    .map((target) => target.slug)
+  if (missingDeleteStrategy.length > 0) {
+    options.logger?.warn(
+      `[payload-isr] Collection targets missing delete revalidation strategy (onDelete): ${missingDeleteStrategy.join(
+        ', ',
+      )}. Deletes will not trigger revalidation for these targets.`,
+    )
+  }
+
+  const emptyDeleteStrategy = collectionTargets
+    .filter((target) => target.onDelete && !hasCollectionDeleteStrategy(target))
+    .map((target) => target.slug)
+  if (emptyDeleteStrategy.length > 0) {
+    options.logger?.warn(
+      `[payload-isr] Collection targets have onDelete configured without resolvers (path/tag/reference): ${emptyDeleteStrategy.join(
+        ', ',
+      )}. Deletes will not trigger revalidation for these targets.`,
     )
   }
 
@@ -292,12 +356,17 @@ const maybeTriggerFullRebuild = async (
     return false
   }
 
-  const probeStatus = await resolveProbeStatus(args.probeURL, options)
+  const probeURL = normalizeProbeURL(options, args)
+  if (!probeURL) {
+    return false
+  }
+
+  const probeStatus = await resolveProbeStatus(probeURL, options)
 
   const context: FullRebuildContext = {
     slug: args.slug,
     probeStatus,
-    probeURL: args.probeURL,
+    probeURL,
     reason: args.reason,
     scope: args.scope,
   }
@@ -310,7 +379,7 @@ const maybeTriggerFullRebuild = async (
     slug: args.slug,
     hasCustomShouldTrigger: Boolean(options.fullRebuild.shouldTrigger),
     probeStatus,
-    probeURL: args.probeURL,
+    probeURL,
     reason: args.reason,
     scope: args.scope,
     shouldTrigger,
@@ -324,7 +393,7 @@ const maybeTriggerFullRebuild = async (
   logDebugTrace(options, 'fullRebuild.triggered', {
     slug: args.slug,
     probeStatus,
-    probeURL: args.probeURL,
+    probeURL,
     reason: args.reason,
     scope: args.scope,
   })
@@ -404,9 +473,14 @@ const revalidateTags = async (
   }
 
   if (!options.revalidateTag) {
-    options.logger?.warn(
-      `[payload-isr] Tags were resolved for "${args.slug}", but revalidateTag is not configured. Skipping tag revalidation.`,
-    )
+    const state = getDebugTraceState()
+    const warningKey = `${args.slug}:${args.scope}:${args.reason}`
+    if (!state.seenMissingRevalidateTagWarnings.has(warningKey)) {
+      state.seenMissingRevalidateTagWarnings.add(warningKey)
+      options.logger?.warn(
+        `[payload-isr] Tags were resolved for "${args.slug}", but revalidateTag is not configured. Skipping tag revalidation.`,
+      )
+    }
     return
   }
 
@@ -780,6 +854,13 @@ const applyCollectionTarget = (
   options: PayloadIsrConfig,
   target: CollectionISRTarget,
 ): void => {
+  if (target.disabled) {
+    logDebugTrace(options, 'config.applyCollectionTarget.skip.disabled', {
+      slug: target.slug,
+    })
+    return
+  }
+
   if (!config.collections) {
     config.collections = []
   }
@@ -828,6 +909,13 @@ const applyGlobalTarget = (
   options: PayloadIsrConfig,
   target: GlobalISRTarget,
 ): void => {
+  if (target.disabled) {
+    logDebugTrace(options, 'config.applyGlobalTarget.skip.disabled', {
+      slug: target.slug,
+    })
+    return
+  }
+
   if (!config.globals) {
     config.globals = []
   }
@@ -890,8 +978,12 @@ export const payloadIsr =
 
     if (isFullRebuildEnabled(runtimeOptions)) {
       const hasProbeURLResolver =
-        (runtimeOptions.collections ?? []).some((target) => typeof target.probeURL === 'function') ||
-        (runtimeOptions.globals ?? []).some((target) => typeof target.probeURL === 'function')
+        (runtimeOptions.collections ?? [])
+          .filter((target) => target.disabled !== true)
+          .some((target) => typeof target.probeURL === 'function') ||
+        (runtimeOptions.globals ?? [])
+          .filter((target) => target.disabled !== true)
+          .some((target) => typeof target.probeURL === 'function')
 
       if (!hasProbeURLResolver) {
         runtimeOptions.logger?.warn(

@@ -73,6 +73,5 @@ export const defaultUnpublishMatcher = (args: CollectionAfterOperationArgs): boo
     return false
   }
 
-  const keys = Object.keys(data)
-  return keys.length === 1 && data._status === 'draft'
+  return data._status === 'draft'
 }
