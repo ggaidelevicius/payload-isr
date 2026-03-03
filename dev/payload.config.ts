@@ -164,6 +164,31 @@ const buildConfigWithMemoryDB = async () => {
             ],
             probeURL: ({ result }) =>
               toAbsoluteDevURL(`/posts/${result.slug ?? result.id}`),
+            referencePathResolver: (args) => {
+              if (args.operation !== 'update' && args.operation !== 'updateByID') {
+                return []
+              }
+
+              const previousSlug =
+                'previousDoc' in args &&
+                typeof args.previousDoc === 'object' &&
+                args.previousDoc !== null &&
+                'slug' in args.previousDoc &&
+                typeof args.previousDoc.slug === 'string'
+                  ? args.previousDoc.slug
+                  : null
+              const currentSlug =
+                typeof args.result.slug === 'string' ? args.result.slug : null
+
+              if (
+                !previousSlug ||
+                previousSlug === currentSlug
+              ) {
+                return []
+              }
+
+              return [`/posts/${previousSlug}`]
+            },
             shouldHandle: ({ result }) => Boolean(result.isPublished),
             tagResolver: ({ result }) => ['posts', `post:${result.id}`],
             unpublish: {

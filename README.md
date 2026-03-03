@@ -140,6 +140,7 @@ pnpm build
 
 Debug helpers in the bundled `dev/` app:
 - set `PAYLOAD_ISR_DEBUG=1` to emit branch-level traces (enabled by default in `dev/payload.config.ts`)
+- set `PAYLOAD_ISR_DEBUG_CONFIG=1` to include noisy `config.*` trace events (disabled by default)
 - set `PAYLOAD_ISR_FULL_REBUILD=1` to enable full-rebuild fallback simulation in local dev
 - optional `PAYLOAD_ISR_PROBE_ORIGIN` (default: `http://127.0.0.1:3000`) controls probe URL base
 - inspect current telemetry via `GET /api/isr-debug`

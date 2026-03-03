@@ -1,9 +1,9 @@
 import type {
   FullRebuildContext,
   LoggerLike,
+  RevalidateTagFn,
   RevalidationMode,
   RevalidationReason,
-  RevalidateTagFn,
 } from '../../src/index.js'
 
 type RevalidationScope = 'collection' | 'global'
@@ -61,6 +61,9 @@ const logEvents: IsrLogEvent[] = []
 const traceEvents: IsrTraceEvent[] = []
 
 const now = (): string => new Date().toISOString()
+const includeConfigTraceEvents = ['1', 'on', 'true', 'yes'].includes(
+  (process.env.PAYLOAD_ISR_DEBUG_CONFIG ?? '').trim().toLowerCase(),
+)
 
 const formatLogArg = (value: unknown): string => {
   if (value instanceof Error) {
@@ -104,11 +107,11 @@ const recordLog = (level: LogLevel, args: unknown[]): void => {
       continue
     }
 
-    const { event, source: _source, type: _type, ...details } = arg
+    const { type: _type, event, source: _source, ...details } = arg
     traceEvents.push({
       at,
-      event,
       details,
+      event,
     })
   }
 }
@@ -117,14 +120,17 @@ const writeConsole = (level: LogLevel, args: unknown[]): void => {
   const prefixedArgs = ['[payload-isr/dev]', ...args]
 
   if (level === 'error') {
+    // eslint-disable-next-line no-console
     console.error(...prefixedArgs)
     return
   }
   if (level === 'warn') {
+    // eslint-disable-next-line no-console
     console.warn(...prefixedArgs)
     return
   }
 
+  // eslint-disable-next-line no-console
   console.info(...prefixedArgs)
 }
 
@@ -158,16 +164,43 @@ export const recordFullRebuild = (context: FullRebuildContext): void => {
 }
 
 export const createIsrDevLogger = (): LoggerLike => {
+  const shouldDropConfigTrace = (args: unknown[]): boolean => {
+    if (includeConfigTraceEvents) {
+      return false
+    }
+
+    for (const arg of args) {
+      if (!isPayloadIsrTracePayload(arg)) {
+        continue
+      }
+
+      if (arg.event.startsWith('config.')) {
+        return true
+      }
+    }
+
+    return false
+  }
+
   return {
     error: (...args: unknown[]): void => {
+      if (shouldDropConfigTrace(args)) {
+        return
+      }
       recordLog('error', args)
       writeConsole('error', args)
     },
     info: (...args: unknown[]): void => {
+      if (shouldDropConfigTrace(args)) {
+        return
+      }
       recordLog('info', args)
       writeConsole('info', args)
     },
     warn: (...args: unknown[]): void => {
+      if (shouldDropConfigTrace(args)) {
+        return
+      }
       recordLog('warn', args)
       writeConsole('warn', args)
     },

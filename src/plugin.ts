@@ -39,6 +39,24 @@ const DEFAULT_COLLECTION_OPERATIONS: ReadonlyArray<CollectionAfterOperationArgs[
   'updateByID',
 ]
 
+type DebugTraceState = {
+  seenConfigEvents: Set<string>
+}
+
+const getDebugTraceState = (): DebugTraceState => {
+  const stateHost = globalThis as {
+    __payloadIsrDebugTraceState?: DebugTraceState
+  }
+
+  if (!stateHost.__payloadIsrDebugTraceState) {
+    stateHost.__payloadIsrDebugTraceState = {
+      seenConfigEvents: new Set<string>(),
+    }
+  }
+
+  return stateHost.__payloadIsrDebugTraceState
+}
+
 const isFullRebuildEnabled = (options: PayloadIsrConfig): boolean =>
   Boolean(options.fullRebuild) && options.fullRebuild?.enabled !== false
 
@@ -64,10 +82,22 @@ const logDebugTrace = (
     return
   }
 
+  if (event.startsWith('config.')) {
+    const state = getDebugTraceState()
+    const slug = typeof details.slug === 'string' ? details.slug : ''
+    const key = `${event}:${slug}`
+
+    if (state.seenConfigEvents.has(key)) {
+      return
+    }
+
+    state.seenConfigEvents.add(key)
+  }
+
   options.logger.info({
-    source: 'payload-isr',
     type: 'debug-trace',
     event,
+    source: 'payload-isr',
     ...details,
   })
 }
@@ -112,10 +142,10 @@ const validateRuntimeConfiguration = (options: PayloadIsrConfig): void => {
   const globalTargets = options.globals ?? []
   logDebugTrace(options, 'config.validate.start', {
     collectionTargetCount: collectionTargets.length,
-    globalTargetCount: globalTargets.length,
-    hasRevalidateTag: Boolean(options.revalidateTag),
     fullRebuildConfigured: Boolean(options.fullRebuild),
     fullRebuildEnabled: options.fullRebuild?.enabled !== false,
+    globalTargetCount: globalTargets.length,
+    hasRevalidateTag: Boolean(options.revalidateTag),
   })
 
   const duplicateCollections = findDuplicateSlugs(collectionTargets)
@@ -199,8 +229,8 @@ const resolveProbeStatus = async (
   try {
     const response = await fetch(probeURL)
     logDebugTrace(options, 'fullRebuild.probe.complete', {
-      probeURL,
       probeStatus: response.status,
+      probeURL,
     })
     return response.status
   } catch (error) {
@@ -263,12 +293,12 @@ const maybeTriggerFullRebuild = async (
 
   logDebugTrace(options, 'fullRebuild.decision', {
     slug: args.slug,
-    reason: args.reason,
-    scope: args.scope,
+    hasCustomShouldTrigger: Boolean(options.fullRebuild.shouldTrigger),
     probeStatus,
     probeURL: args.probeURL,
+    reason: args.reason,
+    scope: args.scope,
     shouldTrigger,
-    hasCustomShouldTrigger: Boolean(options.fullRebuild.shouldTrigger),
   })
 
   if (!shouldTrigger) {
@@ -278,10 +308,10 @@ const maybeTriggerFullRebuild = async (
   await options.fullRebuild.trigger(context)
   logDebugTrace(options, 'fullRebuild.triggered', {
     slug: args.slug,
-    reason: args.reason,
-    scope: args.scope,
     probeStatus,
     probeURL: args.probeURL,
+    reason: args.reason,
+    scope: args.scope,
   })
   return true
 }
@@ -299,21 +329,21 @@ const revalidatePaths = async (
   const normalizedPaths = normalizePaths(args.paths)
   logDebugTrace(options, 'revalidate.paths.resolved', {
     slug: args.slug,
-    reason: args.reason,
-    scope: args.scope,
     mode: args.mode,
-    rawCount: args.paths.length,
     normalizedCount: normalizedPaths.length,
     normalizedPaths,
+    rawCount: args.paths.length,
+    reason: args.reason,
+    scope: args.scope,
   })
 
   for (const path of normalizedPaths) {
     logDebugTrace(options, 'revalidate.path.dispatch', {
       slug: args.slug,
-      reason: args.reason,
-      scope: args.scope,
       mode: args.mode,
       path,
+      reason: args.reason,
+      scope: args.scope,
     })
     await options.revalidatePath(path, {
       slug: args.slug,
@@ -336,11 +366,11 @@ const revalidateTags = async (
   const tags = normalizeTags(args.tags)
   logDebugTrace(options, 'revalidate.tags.resolved', {
     slug: args.slug,
-    reason: args.reason,
-    scope: args.scope,
-    rawCount: args.tags.length,
     normalizedCount: tags.length,
     normalizedTags: tags,
+    rawCount: args.tags.length,
+    reason: args.reason,
+    scope: args.scope,
   })
 
   if (tags.length === 0) {
@@ -398,8 +428,8 @@ const buildCollectionAfterOperationHook = (
   return async (args) => {
     logDebugTrace(options, 'collection.afterOperation.enter', {
       slug: target.slug,
-      operation: args.operation,
       documentId: getDocumentId(args.result),
+      operation: args.operation,
     })
 
     if (!isSupportedCollectionOperation(args.operation)) {
@@ -426,8 +456,8 @@ const buildCollectionAfterOperationHook = (
       const isUnpublish = await matcher(operationArgs)
       logDebugTrace(options, 'collection.afterOperation.unpublish.result', {
         slug: target.slug,
-        operation: operationArgs.operation,
         isUnpublish,
+        operation: operationArgs.operation,
       })
 
       if (isUnpublish) {
@@ -488,8 +518,8 @@ const buildCollectionAfterOperationHook = (
     if (!operations.includes(operationArgs.operation)) {
       logDebugTrace(options, 'collection.afterOperation.skip.operationNotEnabled', {
         slug: target.slug,
-        operation: operationArgs.operation,
         enabledOperations: operations,
+        operation: operationArgs.operation,
       })
       return args.result
     }
@@ -515,8 +545,8 @@ const buildCollectionAfterOperationHook = (
     const probeURL = target.probeURL ? await target.probeURL(operationArgs) : null
     logDebugTrace(options, 'collection.afterOperation.probeURL.resolved', {
       slug: target.slug,
-      operation: operationArgs.operation,
       hasProbeURL: Boolean(probeURL),
+      operation: operationArgs.operation,
       probeURL,
     })
 
@@ -762,8 +792,8 @@ const applyCollectionTarget = (
 
   logDebugTrace(options, 'config.applyCollectionTarget.applied', {
     slug: target.slug,
-    afterOperationHookCount: hooks.afterOperation?.length ?? 0,
     afterDeleteHookCount: hooks.afterDelete?.length ?? 0,
+    afterOperationHookCount: hooks.afterOperation?.length ?? 0,
   })
 }
 
@@ -825,9 +855,9 @@ export const payloadIsr =
 
     logDebugTrace(runtimeOptions, 'config.runtime.initialized', {
       collectionTargetCount: runtimeOptions.collections?.length ?? 0,
-      globalTargetCount: runtimeOptions.globals?.length ?? 0,
       fullRebuildConfigured: Boolean(runtimeOptions.fullRebuild),
       fullRebuildEnabled: runtimeOptions.fullRebuild?.enabled !== false,
+      globalTargetCount: runtimeOptions.globals?.length ?? 0,
     })
 
     validateRuntimeConfiguration(runtimeOptions)
