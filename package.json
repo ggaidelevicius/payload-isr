@@ -36,14 +36,7 @@
     "prepack": "pnpm clean && pnpm build",
     "prepublishOnly": "pnpm test",
     "pack:dry-run": "pnpm pack --dry-run",
-    "publish:check": "pnpm test && pnpm build && pnpm pack --dry-run",
-    "publish:dry-run": "pnpm publish:check && npm publish --access public --dry-run",
-    "publish:npm": "pnpm publish:check && pnpm version:patch && npm publish --access public",
-    "version:patch": "npm version patch --no-git-tag-version",
-    "version:minor": "npm version minor --no-git-tag-version",
-    "version:major": "npm version major --no-git-tag-version",
-    "publish:npm:minor": "pnpm publish:check && pnpm version:minor && npm publish --access public",
-    "publish:npm:major": "pnpm publish:check && pnpm version:major && npm publish --access public"
+    "publish:check": "pnpm test && pnpm build && pnpm pack --dry-run"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
