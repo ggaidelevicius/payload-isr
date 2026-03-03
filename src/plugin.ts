@@ -42,6 +42,36 @@ const DEFAULT_COLLECTION_OPERATIONS: ReadonlyArray<CollectionAfterOperationArgs[
 const isFullRebuildEnabled = (options: PayloadIsrConfig): boolean =>
   Boolean(options.fullRebuild) && options.fullRebuild?.enabled !== false
 
+const getDocumentId = (doc: unknown): null | string => {
+  if (typeof doc !== 'object' || doc === null || !('id' in doc)) {
+    return null
+  }
+
+  const value = (doc as { id?: unknown }).id
+  if (typeof value === 'string' || typeof value === 'number') {
+    return String(value)
+  }
+
+  return null
+}
+
+const logDebugTrace = (
+  options: PayloadIsrConfig,
+  event: string,
+  details: Record<string, unknown> = {},
+): void => {
+  if (!options.debug || !options.logger?.info) {
+    return
+  }
+
+  options.logger.info({
+    source: 'payload-isr',
+    type: 'debug-trace',
+    event,
+    ...details,
+  })
+}
+
 const findDuplicateSlugs = <TTarget extends { slug: string }>(targets: TTarget[]): string[] => {
   const counts = new Map<string, number>()
 
@@ -80,6 +110,13 @@ const usesTagResolvers = (options: PayloadIsrConfig): boolean =>
 const validateRuntimeConfiguration = (options: PayloadIsrConfig): void => {
   const collectionTargets = options.collections ?? []
   const globalTargets = options.globals ?? []
+  logDebugTrace(options, 'config.validate.start', {
+    collectionTargetCount: collectionTargets.length,
+    globalTargetCount: globalTargets.length,
+    hasRevalidateTag: Boolean(options.revalidateTag),
+    fullRebuildConfigured: Boolean(options.fullRebuild),
+    fullRebuildEnabled: options.fullRebuild?.enabled !== false,
+  })
 
   const duplicateCollections = findDuplicateSlugs(collectionTargets)
   if (duplicateCollections.length > 0) {
@@ -144,6 +181,8 @@ const validateRuntimeConfiguration = (options: PayloadIsrConfig): void => {
       )
     }
   }
+
+  logDebugTrace(options, 'config.validate.complete')
 }
 
 const isSupportedCollectionOperation = (
@@ -155,14 +194,21 @@ const resolveProbeStatus = async (
   probeURL: string,
   options: PayloadIsrConfig,
 ): Promise<null | number> => {
+  logDebugTrace(options, 'fullRebuild.probe.start', { probeURL })
+
   try {
     const response = await fetch(probeURL)
+    logDebugTrace(options, 'fullRebuild.probe.complete', {
+      probeURL,
+      probeStatus: response.status,
+    })
     return response.status
   } catch (error) {
     options.logger?.warn(
       `[payload-isr] Failed to probe URL "${probeURL}". Continuing with cache revalidation.`,
       error,
     )
+    logDebugTrace(options, 'fullRebuild.probe.failed', { probeURL })
     return null
   }
 }
@@ -177,12 +223,27 @@ const maybeTriggerFullRebuild = async (
   },
 ): Promise<boolean> => {
   if (!options.fullRebuild) {
+    logDebugTrace(options, 'fullRebuild.skip.noConfig', {
+      slug: args.slug,
+      reason: args.reason,
+      scope: args.scope,
+    })
     return false
   }
   if (options.fullRebuild.enabled === false) {
+    logDebugTrace(options, 'fullRebuild.skip.disabled', {
+      slug: args.slug,
+      reason: args.reason,
+      scope: args.scope,
+    })
     return false
   }
   if (!args.probeURL) {
+    logDebugTrace(options, 'fullRebuild.skip.noProbeURL', {
+      slug: args.slug,
+      reason: args.reason,
+      scope: args.scope,
+    })
     return false
   }
 
@@ -200,11 +261,28 @@ const maybeTriggerFullRebuild = async (
     ? await options.fullRebuild.shouldTrigger(context)
     : probeStatus === 404
 
+  logDebugTrace(options, 'fullRebuild.decision', {
+    slug: args.slug,
+    reason: args.reason,
+    scope: args.scope,
+    probeStatus,
+    probeURL: args.probeURL,
+    shouldTrigger,
+    hasCustomShouldTrigger: Boolean(options.fullRebuild.shouldTrigger),
+  })
+
   if (!shouldTrigger) {
     return false
   }
 
   await options.fullRebuild.trigger(context)
+  logDebugTrace(options, 'fullRebuild.triggered', {
+    slug: args.slug,
+    reason: args.reason,
+    scope: args.scope,
+    probeStatus,
+    probeURL: args.probeURL,
+  })
   return true
 }
 
@@ -218,7 +296,25 @@ const revalidatePaths = async (
     slug: string
   },
 ): Promise<void> => {
-  for (const path of normalizePaths(args.paths)) {
+  const normalizedPaths = normalizePaths(args.paths)
+  logDebugTrace(options, 'revalidate.paths.resolved', {
+    slug: args.slug,
+    reason: args.reason,
+    scope: args.scope,
+    mode: args.mode,
+    rawCount: args.paths.length,
+    normalizedCount: normalizedPaths.length,
+    normalizedPaths,
+  })
+
+  for (const path of normalizedPaths) {
+    logDebugTrace(options, 'revalidate.path.dispatch', {
+      slug: args.slug,
+      reason: args.reason,
+      scope: args.scope,
+      mode: args.mode,
+      path,
+    })
     await options.revalidatePath(path, {
       slug: args.slug,
       mode: args.mode,
@@ -238,6 +334,15 @@ const revalidateTags = async (
   },
 ): Promise<void> => {
   const tags = normalizeTags(args.tags)
+  logDebugTrace(options, 'revalidate.tags.resolved', {
+    slug: args.slug,
+    reason: args.reason,
+    scope: args.scope,
+    rawCount: args.tags.length,
+    normalizedCount: tags.length,
+    normalizedTags: tags,
+  })
+
   if (tags.length === 0) {
     return
   }
@@ -250,6 +355,12 @@ const revalidateTags = async (
   }
 
   for (const tag of tags) {
+    logDebugTrace(options, 'revalidate.tag.dispatch', {
+      slug: args.slug,
+      reason: args.reason,
+      scope: args.scope,
+      tag,
+    })
     await options.revalidateTag(tag, {
       slug: args.slug,
       reason: args.reason,
@@ -285,11 +396,27 @@ const buildCollectionAfterOperationHook = (
   options: PayloadIsrConfig,
 ): CollectionAfterOperationHookFn => {
   return async (args) => {
+    logDebugTrace(options, 'collection.afterOperation.enter', {
+      slug: target.slug,
+      operation: args.operation,
+      documentId: getDocumentId(args.result),
+    })
+
     if (!isSupportedCollectionOperation(args.operation)) {
+      logDebugTrace(options, 'collection.afterOperation.skip.unsupportedOperation', {
+        slug: target.slug,
+        operation: args.operation,
+      })
       return args.result
     }
     const operationArgs = args as unknown as CollectionAfterOperationArgs
     const supportsUnpublish = target.unpublish?.enabled !== false
+
+    logDebugTrace(options, 'collection.afterOperation.unpublish.check', {
+      slug: target.slug,
+      operation: operationArgs.operation,
+      supportsUnpublish,
+    })
 
     if (
       supportsUnpublish &&
@@ -297,6 +424,11 @@ const buildCollectionAfterOperationHook = (
     ) {
       const matcher = target.unpublish?.matcher ?? defaultUnpublishMatcher
       const isUnpublish = await matcher(operationArgs)
+      logDebugTrace(options, 'collection.afterOperation.unpublish.result', {
+        slug: target.slug,
+        operation: operationArgs.operation,
+        isUnpublish,
+      })
 
       if (isUnpublish) {
         const paths = [
@@ -325,6 +457,12 @@ const buildCollectionAfterOperationHook = (
               : []),
         ]
 
+        logDebugTrace(options, 'collection.afterOperation.unpublish.revalidate', {
+          slug: target.slug,
+          pathCount: paths.length,
+          tagCount: tags.length,
+        })
+
         await revalidatePaths(options, {
           slug: target.slug,
           mode: 'path',
@@ -339,38 +477,77 @@ const buildCollectionAfterOperationHook = (
           tags,
         })
 
+        logDebugTrace(options, 'collection.afterOperation.unpublish.complete', {
+          slug: target.slug,
+        })
         return args.result
       }
     }
 
     const operations = target.operations ?? DEFAULT_COLLECTION_OPERATIONS
     if (!operations.includes(operationArgs.operation)) {
+      logDebugTrace(options, 'collection.afterOperation.skip.operationNotEnabled', {
+        slug: target.slug,
+        operation: operationArgs.operation,
+        enabledOperations: operations,
+      })
       return args.result
     }
 
     const shouldHandle = target.shouldHandle
       ? await target.shouldHandle(operationArgs)
       : defaultPublishedDocGuard(operationArgs.result)
+    logDebugTrace(options, 'collection.afterOperation.shouldHandle.result', {
+      slug: target.slug,
+      operation: operationArgs.operation,
+      shouldHandle,
+      usedCustomGuard: Boolean(target.shouldHandle),
+    })
 
     if (!shouldHandle) {
+      logDebugTrace(options, 'collection.afterOperation.skip.shouldHandleFalse', {
+        slug: target.slug,
+        operation: operationArgs.operation,
+      })
       return args.result
     }
 
+    const probeURL = target.probeURL ? await target.probeURL(operationArgs) : null
+    logDebugTrace(options, 'collection.afterOperation.probeURL.resolved', {
+      slug: target.slug,
+      operation: operationArgs.operation,
+      hasProbeURL: Boolean(probeURL),
+      probeURL,
+    })
+
     const fullRebuildTriggered = await maybeTriggerFullRebuild(options, {
       slug: target.slug,
-      probeURL: target.probeURL ? await target.probeURL(operationArgs) : null,
+      probeURL,
       reason: 'collection-update',
       scope: 'collection',
     })
 
     if (fullRebuildTriggered) {
+      logDebugTrace(options, 'collection.afterOperation.complete.fullRebuild', {
+        slug: target.slug,
+        operation: operationArgs.operation,
+      })
       return args.result
     }
+
+    const paths = await resolveCollectionPaths(target, operationArgs)
+    const tags = await resolveCollectionTags(target, operationArgs)
+    logDebugTrace(options, 'collection.afterOperation.revalidate', {
+      slug: target.slug,
+      operation: operationArgs.operation,
+      pathCount: paths.length,
+      tagCount: tags.length,
+    })
 
     await revalidatePaths(options, {
       slug: target.slug,
       mode: 'path',
-      paths: await resolveCollectionPaths(target, operationArgs),
+      paths,
       reason: 'collection-update',
       scope: 'collection',
     })
@@ -378,9 +555,13 @@ const buildCollectionAfterOperationHook = (
       slug: target.slug,
       reason: 'collection-update',
       scope: 'collection',
-      tags: await resolveCollectionTags(target, operationArgs),
+      tags,
     })
 
+    logDebugTrace(options, 'collection.afterOperation.complete.revalidation', {
+      slug: target.slug,
+      operation: operationArgs.operation,
+    })
     return args.result
   }
 }
@@ -390,7 +571,16 @@ const buildCollectionAfterDeleteHook = (
   options: PayloadIsrConfig,
 ): CollectionAfterDeleteHookFn => {
   return async (args) => {
+    logDebugTrace(options, 'collection.afterDelete.enter', {
+      slug: target.slug,
+      documentId: getDocumentId(args.doc),
+      hasOnDelete: Boolean(target.onDelete),
+    })
+
     if (!target.onDelete) {
+      logDebugTrace(options, 'collection.afterDelete.skip.noOnDeleteConfig', {
+        slug: target.slug,
+      })
       return args.doc
     }
 
@@ -408,6 +598,12 @@ const buildCollectionAfterDeleteHook = (
         : []),
     ]
 
+    logDebugTrace(options, 'collection.afterDelete.revalidate', {
+      slug: target.slug,
+      pathCount: paths.length,
+      tagCount: tags.length,
+    })
+
     await revalidatePaths(options, {
       slug: target.slug,
       mode: 'path',
@@ -422,6 +618,9 @@ const buildCollectionAfterDeleteHook = (
       tags,
     })
 
+    logDebugTrace(options, 'collection.afterDelete.complete.revalidation', {
+      slug: target.slug,
+    })
     return args.doc
   }
 }
@@ -431,26 +630,54 @@ const buildGlobalAfterChangeHook = (
   options: PayloadIsrConfig,
 ): GlobalAfterChangeHookFn => {
   return async (args) => {
+    logDebugTrace(options, 'global.afterChange.enter', {
+      slug: target.slug,
+      documentId: getDocumentId(args.doc),
+      revalidateAllOnChange: Boolean(target.revalidateAllOnChange),
+    })
+
     const shouldHandle = target.shouldHandle
       ? await target.shouldHandle(args)
       : defaultPublishedDocGuard(args.doc)
+    logDebugTrace(options, 'global.afterChange.shouldHandle.result', {
+      slug: target.slug,
+      shouldHandle,
+      usedCustomGuard: Boolean(target.shouldHandle),
+    })
 
     if (!shouldHandle) {
+      logDebugTrace(options, 'global.afterChange.skip.shouldHandleFalse', {
+        slug: target.slug,
+      })
       return args.doc
     }
 
+    const probeURL = target.probeURL ? await target.probeURL(args) : null
+    logDebugTrace(options, 'global.afterChange.probeURL.resolved', {
+      slug: target.slug,
+      hasProbeURL: Boolean(probeURL),
+      probeURL,
+    })
+
     const fullRebuildTriggered = await maybeTriggerFullRebuild(options, {
       slug: target.slug,
-      probeURL: target.probeURL ? await target.probeURL(args) : null,
+      probeURL,
       reason: 'global-update',
       scope: 'global',
     })
 
     if (fullRebuildTriggered) {
+      logDebugTrace(options, 'global.afterChange.complete.fullRebuild', {
+        slug: target.slug,
+      })
       return args.doc
     }
 
     if (target.revalidateAllOnChange) {
+      logDebugTrace(options, 'global.afterChange.revalidateAll', {
+        slug: target.slug,
+        path: target.revalidateAllPath ?? '/',
+      })
       await revalidatePaths(options, {
         slug: target.slug,
         mode: 'site',
@@ -459,22 +686,35 @@ const buildGlobalAfterChangeHook = (
         scope: 'global',
       })
     } else {
+      const paths = target.pathResolver ? await target.pathResolver(args) : []
+      logDebugTrace(options, 'global.afterChange.revalidatePaths', {
+        slug: target.slug,
+        pathCount: paths.length,
+      })
       await revalidatePaths(options, {
         slug: target.slug,
         mode: 'path',
-        paths: target.pathResolver ? await target.pathResolver(args) : [],
+        paths,
         reason: 'global-update',
         scope: 'global',
       })
     }
 
+    const tags = target.tagResolver ? await target.tagResolver(args) : []
+    logDebugTrace(options, 'global.afterChange.revalidateTags', {
+      slug: target.slug,
+      tagCount: tags.length,
+    })
     await revalidateTags(options, {
       slug: target.slug,
       reason: 'global-update',
       scope: 'global',
-      tags: target.tagResolver ? await target.tagResolver(args) : [],
+      tags,
     })
 
+    logDebugTrace(options, 'global.afterChange.complete.revalidation', {
+      slug: target.slug,
+    })
     return args.doc
   }
 }
@@ -492,6 +732,9 @@ const applyCollectionTarget = (
 
   if (index < 0) {
     options.logger?.warn(`[payload-isr] Collection "${target.slug}" not found. Skipping target.`)
+    logDebugTrace(options, 'config.applyCollectionTarget.skip.notFound', {
+      slug: target.slug,
+    })
     return
   }
 
@@ -516,6 +759,12 @@ const applyCollectionTarget = (
     ...existingCollection,
     hooks,
   }
+
+  logDebugTrace(options, 'config.applyCollectionTarget.applied', {
+    slug: target.slug,
+    afterOperationHookCount: hooks.afterOperation?.length ?? 0,
+    afterDeleteHookCount: hooks.afterDelete?.length ?? 0,
+  })
 }
 
 const applyGlobalTarget = (
@@ -531,6 +780,9 @@ const applyGlobalTarget = (
 
   if (index < 0) {
     options.logger?.warn(`[payload-isr] Global "${target.slug}" not found. Skipping target.`)
+    logDebugTrace(options, 'config.applyGlobalTarget.skip.notFound', {
+      slug: target.slug,
+    })
     return
   }
 
@@ -545,12 +797,18 @@ const applyGlobalTarget = (
     ...existingGlobal,
     hooks,
   }
+
+  logDebugTrace(options, 'config.applyGlobalTarget.applied', {
+    slug: target.slug,
+    afterChangeHookCount: hooks.afterChange?.length ?? 0,
+  })
 }
 
 export const payloadIsr =
   <const TConfig extends PayloadIsrConfig>(pluginOptions: TConfig) =>
   (incomingConfig: Config): Config => {
     if (pluginOptions.disabled) {
+      logDebugTrace(pluginOptions, 'config.skip.disabled')
       return incomingConfig
     }
 
@@ -565,6 +823,13 @@ export const payloadIsr =
       logger: pluginOptions.logger ?? console,
     }
 
+    logDebugTrace(runtimeOptions, 'config.runtime.initialized', {
+      collectionTargetCount: runtimeOptions.collections?.length ?? 0,
+      globalTargetCount: runtimeOptions.globals?.length ?? 0,
+      fullRebuildConfigured: Boolean(runtimeOptions.fullRebuild),
+      fullRebuildEnabled: runtimeOptions.fullRebuild?.enabled !== false,
+    })
+
     validateRuntimeConfiguration(runtimeOptions)
 
     if (isFullRebuildEnabled(runtimeOptions)) {
@@ -576,6 +841,7 @@ export const payloadIsr =
         runtimeOptions.logger?.warn(
           '[payload-isr] fullRebuild is enabled, but no probeURL resolvers are configured. Full rebuild fallback will never run.',
         )
+        logDebugTrace(runtimeOptions, 'fullRebuild.warn.noProbeResolver')
       }
     }
 
@@ -587,5 +853,6 @@ export const payloadIsr =
       applyGlobalTarget(config, runtimeOptions, globalTarget)
     }
 
+    logDebugTrace(runtimeOptions, 'config.runtime.complete')
     return config
   }

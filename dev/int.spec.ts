@@ -6,6 +6,7 @@ import { beforeAll, beforeEach, describe, expect, test } from 'vitest'
 
 import {
   clearRevalidationEvents,
+  getIsrTraceEvents,
   getPathRevalidationEvents,
   getTagRevalidationEvents,
 } from './helpers/revalidationRecorder.js'
@@ -50,6 +51,31 @@ describe('Plugin integration tests', () => {
     expect(tagEvents.every((event) => event.meta.reason === 'collection-update')).toBe(
       true,
     )
+  })
+
+  test('records short-circuit trace when shouldHandle returns false', async () => {
+    await payload.create({
+      collection: 'posts',
+      data: {
+        title: 'Draft-like post',
+        slug: 'draft-like-post',
+        isPublished: false,
+      },
+    })
+
+    const pathEvents = getPathRevalidationEvents()
+    const tagEvents = getTagRevalidationEvents()
+    const traceEvents = getIsrTraceEvents()
+
+    expect(pathEvents).toHaveLength(0)
+    expect(tagEvents).toHaveLength(0)
+    expect(
+      traceEvents.some(
+        (event) =>
+          event.event === 'collection.afterOperation.skip.shouldHandleFalse' &&
+          event.details.slug === 'posts',
+      ),
+    ).toBe(true)
   })
 
   test('revalidates collection paths and tags when unpublishing', async () => {
