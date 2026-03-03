@@ -1,0 +1,48 @@
+name: Feature request
+description: Suggest an enhancement for @ggaidelevicius/payload-isr
+title: "feat: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the use case first, then the API shape you expect.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What are you trying to achieve?
+      placeholder: Describe the real-world workflow or limitation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Suggest API changes or behavior.
+      placeholder: e.g. add option X with shape Y
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What workarounds exist today?
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Who benefits and why this should be prioritized.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and discussions.
+          required: true

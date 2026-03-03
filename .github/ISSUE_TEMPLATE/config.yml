@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Discussions (Q&A and ideas)
+    url: https://github.com/ggaidelevicius/payload-isr/discussions
+    about: Ask questions, share usage patterns, and discuss ideas.
+  - name: Security report
+    url: https://github.com/ggaidelevicius/payload-isr/security/advisories/new
+    about: Please report security vulnerabilities privately.
