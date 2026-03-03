@@ -21,16 +21,35 @@ if (!process.env.ROOT_DIR) {
   process.env.ROOT_DIR = dirname
 }
 
-const buildConfigWithMemoryDB = async () => {
-  if (process.env.NODE_ENV === 'test' || !process.env.DATABASE_URL) {
-    const memoryDB = await MongoMemoryReplSet.create({
+declare global {
+  // eslint-disable-next-line no-var
+  var __payloadMemoryDbUri: string | undefined
+  // eslint-disable-next-line no-var
+  var __payloadMemoryDbUriPromise: Promise<string> | undefined
+}
+
+const getOrCreateMemoryDatabaseURI = async (): Promise<string> => {
+  if (globalThis.__payloadMemoryDbUri) {
+    return globalThis.__payloadMemoryDbUri
+  }
+
+  if (!globalThis.__payloadMemoryDbUriPromise) {
+    globalThis.__payloadMemoryDbUriPromise = MongoMemoryReplSet.create({
       replSet: {
-        count: 3,
+        count: 1,
         dbName: 'payloadmemory',
       },
-    })
+    }).then((memoryDB) => `${memoryDB.getUri()}&retryWrites=true`)
+  }
 
-    process.env.DATABASE_URL = `${memoryDB.getUri()}&retryWrites=true`
+  const uri = await globalThis.__payloadMemoryDbUriPromise
+  globalThis.__payloadMemoryDbUri = uri
+  return uri
+}
+
+const buildConfigWithMemoryDB = async () => {
+  if (process.env.NODE_ENV === 'test' || !process.env.DATABASE_URL) {
+    process.env.DATABASE_URL = await getOrCreateMemoryDatabaseURI()
   }
 
   return buildConfig({

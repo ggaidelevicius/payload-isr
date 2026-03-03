@@ -6,9 +6,7 @@ import type {
 
 export type MaybePromise<T> = Promise<T> | T
 
-export type CollectionAfterOperationArgs = Parameters<
-  CollectionAfterOperationHook<string>
->[0]
+export type CollectionAfterOperationArgs = Parameters<CollectionAfterOperationHook<string>>[0]
 
 export type CollectionAfterDeleteArgs = Parameters<CollectionAfterDeleteHook>[0]
 
@@ -59,23 +57,15 @@ export interface CollectionUnpublishConfig {
   enabled?: boolean
   matcher?: (args: CollectionAfterOperationArgs) => MaybePromise<boolean>
   pathResolver?: (args: CollectionAfterOperationArgs) => MaybePromise<string[]>
-  referencePathResolver?: (
-    args: CollectionAfterOperationArgs,
-  ) => MaybePromise<string[]>
-  referenceTagResolver?: (
-    args: CollectionAfterOperationArgs,
-  ) => MaybePromise<string[]>
+  referencePathResolver?: (args: CollectionAfterOperationArgs) => MaybePromise<string[]>
+  referenceTagResolver?: (args: CollectionAfterOperationArgs) => MaybePromise<string[]>
   tagResolver?: (args: CollectionAfterOperationArgs) => MaybePromise<string[]>
 }
 
 export interface CollectionDeleteConfig {
   pathResolver?: (args: CollectionAfterDeleteArgs) => MaybePromise<string[]>
-  referencePathResolver?: (
-    args: CollectionAfterDeleteArgs,
-  ) => MaybePromise<string[]>
-  referenceTagResolver?: (
-    args: CollectionAfterDeleteArgs,
-  ) => MaybePromise<string[]>
+  referencePathResolver?: (args: CollectionAfterDeleteArgs) => MaybePromise<string[]>
+  referenceTagResolver?: (args: CollectionAfterDeleteArgs) => MaybePromise<string[]>
   tagResolver?: (args: CollectionAfterDeleteArgs) => MaybePromise<string[]>
 }
 
@@ -83,15 +73,9 @@ export interface CollectionISRTarget {
   onDelete?: CollectionDeleteConfig
   operations?: ReadonlyArray<CollectionAfterOperationArgs['operation']>
   pathResolver?: (args: CollectionAfterOperationArgs) => MaybePromise<string[]>
-  probeURL?: (
-    args: CollectionAfterOperationArgs,
-  ) => MaybePromise<null | string | undefined>
-  referencePathResolver?: (
-    args: CollectionAfterOperationArgs,
-  ) => MaybePromise<string[]>
-  referenceTagResolver?: (
-    args: CollectionAfterOperationArgs,
-  ) => MaybePromise<string[]>
+  probeURL?: (args: CollectionAfterOperationArgs) => MaybePromise<null | string | undefined>
+  referencePathResolver?: (args: CollectionAfterOperationArgs) => MaybePromise<string[]>
+  referenceTagResolver?: (args: CollectionAfterOperationArgs) => MaybePromise<string[]>
   shouldHandle?: (args: CollectionAfterOperationArgs) => MaybePromise<boolean>
   slug: string
   tagResolver?: (args: CollectionAfterOperationArgs) => MaybePromise<string[]>
@@ -100,9 +84,7 @@ export interface CollectionISRTarget {
 
 export interface GlobalISRTarget {
   pathResolver?: (args: GlobalAfterChangeArgs) => MaybePromise<string[]>
-  probeURL?: (
-    args: GlobalAfterChangeArgs,
-  ) => MaybePromise<null | string | undefined>
+  probeURL?: (args: GlobalAfterChangeArgs) => MaybePromise<null | string | undefined>
   revalidateAllOnChange?: boolean
   revalidateAllPath?: string
   shouldHandle?: (args: GlobalAfterChangeArgs) => MaybePromise<boolean>

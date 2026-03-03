@@ -29,9 +29,11 @@ type GlobalAfterChangeHookFn = NonNullable<
   NonNullable<GlobalConfig['hooks']>['afterChange']
 >[number]
 
-const DEFAULT_COLLECTION_OPERATIONS: ReadonlyArray<
-  CollectionAfterOperationArgs['operation']
-> = ['create', 'update', 'updateByID']
+const DEFAULT_COLLECTION_OPERATIONS: ReadonlyArray<CollectionAfterOperationArgs['operation']> = [
+  'create',
+  'update',
+  'updateByID',
+]
 
 const resolveProbeStatus = async (
   probeURL: string,
@@ -58,25 +60,33 @@ const maybeTriggerFullRebuild = async (
     slug: string
   },
 ): Promise<boolean> => {
-  if (!options.fullRebuild) return false
-  if (options.fullRebuild.enabled === false) return false
-  if (!args.probeURL) return false
+  if (!options.fullRebuild) {
+    return false
+  }
+  if (options.fullRebuild.enabled === false) {
+    return false
+  }
+  if (!args.probeURL) {
+    return false
+  }
 
   const probeStatus = await resolveProbeStatus(args.probeURL, options)
 
   const context: FullRebuildContext = {
+    slug: args.slug,
     probeStatus,
     probeURL: args.probeURL,
     reason: args.reason,
     scope: args.scope,
-    slug: args.slug,
   }
 
   const shouldTrigger = options.fullRebuild.shouldTrigger
     ? await options.fullRebuild.shouldTrigger(context)
     : probeStatus === 404
 
-  if (!shouldTrigger) return false
+  if (!shouldTrigger) {
+    return false
+  }
 
   await options.fullRebuild.trigger(context)
   return true
@@ -94,10 +104,10 @@ const revalidatePaths = async (
 ): Promise<void> => {
   for (const path of normalizePaths(args.paths)) {
     await options.revalidatePath(path, {
+      slug: args.slug,
       mode: args.mode,
       reason: args.reason,
       scope: args.scope,
-      slug: args.slug,
     })
   }
 }
@@ -112,7 +122,9 @@ const revalidateTags = async (
   },
 ): Promise<void> => {
   const tags = normalizeTags(args.tags)
-  if (tags.length === 0) return
+  if (tags.length === 0) {
+    return
+  }
 
   if (!options.revalidateTag) {
     options.logger?.warn(
@@ -123,9 +135,9 @@ const revalidateTags = async (
 
   for (const tag of tags) {
     await options.revalidateTag(tag, {
+      slug: args.slug,
       reason: args.reason,
       scope: args.scope,
-      slug: args.slug,
     })
   }
 }
@@ -147,9 +159,7 @@ const resolveCollectionTags = async (
   args: CollectionAfterOperationArgs,
 ): Promise<string[]> => {
   const baseTags = target.tagResolver ? await target.tagResolver(args) : []
-  const referenceTags = target.referenceTagResolver
-    ? await target.referenceTagResolver(args)
-    : []
+  const referenceTags = target.referenceTagResolver ? await target.referenceTagResolver(args) : []
 
   return [...baseTags, ...referenceTags]
 }
@@ -193,16 +203,16 @@ const buildCollectionAfterOperationHook = (
         ]
 
         await revalidatePaths(options, {
+          slug: target.slug,
           mode: 'path',
           paths,
           reason: 'collection-unpublish',
           scope: 'collection',
-          slug: target.slug,
         })
         await revalidateTags(options, {
+          slug: target.slug,
           reason: 'collection-unpublish',
           scope: 'collection',
-          slug: target.slug,
           tags,
         })
 
@@ -211,34 +221,40 @@ const buildCollectionAfterOperationHook = (
     }
 
     const operations = target.operations ?? DEFAULT_COLLECTION_OPERATIONS
-    if (!operations.includes(args.operation)) return args.result
+    if (!operations.includes(args.operation)) {
+      return args.result
+    }
 
     const shouldHandle = target.shouldHandle
       ? await target.shouldHandle(args)
       : defaultPublishedDocGuard(args.result)
 
-    if (!shouldHandle) return args.result
+    if (!shouldHandle) {
+      return args.result
+    }
 
     const fullRebuildTriggered = await maybeTriggerFullRebuild(options, {
+      slug: target.slug,
       probeURL: target.probeURL ? await target.probeURL(args) : null,
       reason: 'collection-update',
       scope: 'collection',
-      slug: target.slug,
     })
 
-    if (fullRebuildTriggered) return args.result
+    if (fullRebuildTriggered) {
+      return args.result
+    }
 
     await revalidatePaths(options, {
+      slug: target.slug,
       mode: 'path',
       paths: await resolveCollectionPaths(target, args),
       reason: 'collection-update',
       scope: 'collection',
-      slug: target.slug,
     })
     await revalidateTags(options, {
+      slug: target.slug,
       reason: 'collection-update',
       scope: 'collection',
-      slug: target.slug,
       tags: await resolveCollectionTags(target, args),
     })
 
@@ -251,7 +267,9 @@ const buildCollectionAfterDeleteHook = (
   options: PayloadIsrConfig,
 ): CollectionAfterDeleteHookFn => {
   return async (args) => {
-    if (!target.onDelete) return args.doc
+    if (!target.onDelete) {
+      return args.doc
+    }
 
     const paths = [
       ...(target.onDelete.pathResolver ? await target.onDelete.pathResolver(args) : []),
@@ -268,16 +286,16 @@ const buildCollectionAfterDeleteHook = (
     ]
 
     await revalidatePaths(options, {
+      slug: target.slug,
       mode: 'path',
       paths,
       reason: 'collection-delete',
       scope: 'collection',
-      slug: target.slug,
     })
     await revalidateTags(options, {
+      slug: target.slug,
       reason: 'collection-delete',
       scope: 'collection',
-      slug: target.slug,
       tags,
     })
 
@@ -294,39 +312,43 @@ const buildGlobalAfterChangeHook = (
       ? await target.shouldHandle(args)
       : defaultPublishedDocGuard(args.doc)
 
-    if (!shouldHandle) return args.doc
+    if (!shouldHandle) {
+      return args.doc
+    }
 
     const fullRebuildTriggered = await maybeTriggerFullRebuild(options, {
+      slug: target.slug,
       probeURL: target.probeURL ? await target.probeURL(args) : null,
       reason: 'global-update',
       scope: 'global',
-      slug: target.slug,
     })
 
-    if (fullRebuildTriggered) return args.doc
+    if (fullRebuildTriggered) {
+      return args.doc
+    }
 
     if (target.revalidateAllOnChange) {
       await revalidatePaths(options, {
+        slug: target.slug,
         mode: 'site',
         paths: [target.revalidateAllPath ?? '/'],
         reason: 'global-update',
         scope: 'global',
-        slug: target.slug,
       })
     } else {
       await revalidatePaths(options, {
+        slug: target.slug,
         mode: 'path',
         paths: target.pathResolver ? await target.pathResolver(args) : [],
         reason: 'global-update',
         scope: 'global',
-        slug: target.slug,
       })
     }
 
     await revalidateTags(options, {
+      slug: target.slug,
       reason: 'global-update',
       scope: 'global',
-      slug: target.slug,
       tags: target.tagResolver ? await target.tagResolver(args) : [],
     })
 
@@ -343,14 +365,10 @@ const applyCollectionTarget = (
     config.collections = []
   }
 
-  const index = config.collections.findIndex(
-    (collection) => collection.slug === target.slug,
-  )
+  const index = config.collections.findIndex((collection) => collection.slug === target.slug)
 
   if (index < 0) {
-    options.logger?.warn(
-      `[payload-isr] Collection "${target.slug}" not found. Skipping target.`,
-    )
+    options.logger?.warn(`[payload-isr] Collection "${target.slug}" not found. Skipping target.`)
     return
   }
 
@@ -389,9 +407,7 @@ const applyGlobalTarget = (
   const index = config.globals.findIndex((global) => global.slug === target.slug)
 
   if (index < 0) {
-    options.logger?.warn(
-      `[payload-isr] Global "${target.slug}" not found. Skipping target.`,
-    )
+    options.logger?.warn(`[payload-isr] Global "${target.slug}" not found. Skipping target.`)
     return
   }
 
@@ -400,10 +416,7 @@ const applyGlobalTarget = (
     ...(existingGlobal.hooks ?? {}),
   }
 
-  hooks.afterChange = [
-    ...(hooks.afterChange ?? []),
-    buildGlobalAfterChangeHook(target, options),
-  ]
+  hooks.afterChange = [...(hooks.afterChange ?? []), buildGlobalAfterChangeHook(target, options)]
 
   config.globals[index] = {
     ...existingGlobal,
@@ -414,7 +427,9 @@ const applyGlobalTarget = (
 export const payloadIsr =
   (pluginOptions: PayloadIsrConfig) =>
   (incomingConfig: Config): Config => {
-    if (pluginOptions.disabled) return incomingConfig
+    if (pluginOptions.disabled) {
+      return incomingConfig
+    }
 
     const config: Config = {
       ...incomingConfig,
