@@ -10,12 +10,8 @@ import type {
 
 export type MaybePromise<T> = Promise<T> | T
 
-type AnyFunction = (...args: unknown[]) => unknown
-
-type ElementOf<T> = T extends readonly (infer U)[] ? U : never
-
 type RequireAtLeastOne<T, Keys extends keyof T = keyof T> = Keys extends keyof T
-  ? Required<Pick<T, Keys>> & Omit<T, Keys>
+  ? Omit<T, Keys> & Required<Pick<T, Keys>>
   : never
 
 type RawCollectionAfterOperationArgs<TSlug extends CollectionSlug> = Parameters<
@@ -128,13 +124,13 @@ type CollectionUpdateStrategy<TSlug extends CollectionSlug> = RequireAtLeastOne<
 >
 
 export type CollectionISRTarget<TSlug extends CollectionSlug = CollectionSlug> =
-  CollectionUpdateStrategy<TSlug> & {
+  {
   onDelete?: CollectionDeleteConfig<TSlug>
   operations?: ReadonlyArray<CollectionAfterOperationArgs<TSlug>['operation']>
   shouldHandle?: (args: CollectionAfterOperationArgs<TSlug>) => MaybePromise<boolean>
   slug: TSlug
   unpublish?: CollectionUnpublishConfig<TSlug>
-}
+} & CollectionUpdateStrategy<TSlug>
 
 type GlobalUpdateResolvers<TSlug extends GlobalSlug> = {
   pathResolver?: (args: GlobalAfterChangeArgs<TSlug>) => MaybePromise<string[]>
@@ -156,10 +152,10 @@ type GlobalUpdateStrategy<TSlug extends GlobalSlug> =
   | GlobalTargetPathStrategy<TSlug>
   | GlobalTargetSiteStrategy<TSlug>
 
-export type GlobalISRTarget<TSlug extends GlobalSlug = GlobalSlug> = GlobalUpdateStrategy<TSlug> & {
+export type GlobalISRTarget<TSlug extends GlobalSlug = GlobalSlug> = {
   shouldHandle?: (args: GlobalAfterChangeArgs<TSlug>) => MaybePromise<boolean>
   slug: TSlug
-}
+} & GlobalUpdateStrategy<TSlug>
 
 export type AnyCollectionISRTarget = {
   [TSlug in CollectionSlug]: CollectionISRTarget<TSlug>
@@ -175,29 +171,6 @@ export interface LoggerLike {
   warn: (...args: unknown[]) => void
 }
 
-type HasProbeURL<TTargets> = [Extract<ElementOf<NonNullable<TTargets>>, { probeURL: AnyFunction }>] extends [never]
-  ? false
-  : true
-
-type HasAnyProbeURL<TConfig extends PayloadIsrConfig> = HasProbeURL<TConfig['collections']> extends true
-  ? true
-  : HasProbeURL<TConfig['globals']>
-
-type IsFullRebuildEnabled<TConfig extends PayloadIsrConfig> = TConfig['fullRebuild'] extends undefined
-  ? false
-  : TConfig['fullRebuild'] extends { enabled: false }
-    ? false
-    : true
-
-type FullRebuildProbeConstraint<TConfig extends PayloadIsrConfig> =
-  IsFullRebuildEnabled<TConfig> extends true
-    ? HasAnyProbeURL<TConfig> extends true
-      ? {}
-      : {
-          __payload_isr_error_fullRebuild_requires_probeURL: 'When fullRebuild is enabled, configure probeURL on at least one collection or global target.'
-        }
-    : {}
-
 export type PayloadIsrConfig = {
   collections?: AnyCollectionISRTarget[]
   disabled?: boolean
@@ -207,6 +180,3 @@ export type PayloadIsrConfig = {
   revalidatePath: RevalidatePathFn
   revalidateTag?: RevalidateTagFn
 }
-
-export type PayloadIsrConfigInput<TConfig extends PayloadIsrConfig> = TConfig &
-  FullRebuildProbeConstraint<TConfig>

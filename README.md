@@ -69,7 +69,6 @@ export default buildConfig({
 - collection/global targets require at least one update strategy at type level:
   - collection: one of `pathResolver`, `tagResolver`, `referencePathResolver`, `referenceTagResolver`, `probeURL`
   - global: `revalidateAllOnChange: true` or one of `pathResolver`, `tagResolver`, `probeURL`
-- when `fullRebuild` is enabled, TypeScript enforces at least one `probeURL` on a collection or global target.
 - `disabled?: boolean`
 - `revalidatePath(path, meta)` (required)
 - `revalidateTag?(tag, meta)` (optional)

@@ -8,7 +8,6 @@ import type {
   FullRebuildContext,
   GlobalISRTarget,
   PayloadIsrConfig,
-  PayloadIsrConfigInput,
   RevalidationMode,
   RevalidationReason,
 } from './types.js'
@@ -549,7 +548,7 @@ const applyGlobalTarget = (
 }
 
 export const payloadIsr =
-  <TConfig extends PayloadIsrConfig>(pluginOptions: PayloadIsrConfigInput<TConfig>) =>
+  <const TConfig extends PayloadIsrConfig>(pluginOptions: TConfig) =>
   (incomingConfig: Config): Config => {
     if (pluginOptions.disabled) {
       return incomingConfig
