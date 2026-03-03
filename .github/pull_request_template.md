@@ -15,7 +15,6 @@
 ## Validation
 
 - [ ] `pnpm test:int`
-- [ ] `pnpm test:e2e` (if behavior/UI affected)
 - [ ] `pnpm build`
 
 ## Release impact

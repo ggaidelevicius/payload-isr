@@ -133,6 +133,7 @@ Common `trigger` implementations:
 ## Local development
 
 ```bash
+pnpm hooks:install
 pnpm dev
 pnpm test:int
 pnpm build
@@ -145,3 +146,7 @@ Debug helpers in the bundled `dev/` app:
 - optional `PAYLOAD_ISR_PROBE_ORIGIN` (default: `http://127.0.0.1:3000`) controls probe URL base
 - inspect current telemetry via `GET /api/isr-debug`
 - clear telemetry via `DELETE /api/isr-debug`
+
+Release commit marker guard:
+- commit messages with `(release...)` must use exactly one enum: `(release:patch)`, `(release:minor)`, or `(release:major)`
+- invalid values like `(release:path)` are rejected by the `commit-msg` hook

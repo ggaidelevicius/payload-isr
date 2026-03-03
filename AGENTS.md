@@ -7,7 +7,7 @@ This repository publishes `@ggaidelevicius/payload-isr`, a Payload CMS plugin fo
 - Language: TypeScript
 - Package manager: pnpm
 - Build output: `dist/` (types via `tsc`, JS via `swc`)
-- Tests: Vitest (`test:int`) + Playwright (`test:e2e`)
+- Tests: Vitest (`test:int`)
 
 ## Source of Truth
 - Runtime + type entrypoints must resolve to `dist` in `package.json`:
@@ -20,7 +20,6 @@ This repository publishes `@ggaidelevicius/payload-isr`, a Payload CMS plugin fo
 ## Developer Commands
 - Build: `pnpm build`
 - Unit/integration: `pnpm test:int`
-- End-to-end: `pnpm test:e2e`
 - Full suite: `pnpm test`
 - Publish readiness check: `pnpm publish:check`
 
