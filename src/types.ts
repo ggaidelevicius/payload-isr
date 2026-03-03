@@ -1,26 +1,40 @@
 import type {
   CollectionAfterDeleteHook,
   CollectionAfterOperationHook,
+  CollectionSlug,
+  DataFromCollectionSlug,
+  DataFromGlobalSlug,
   GlobalAfterChangeHook,
+  GlobalSlug,
 } from 'payload'
 
 export type MaybePromise<T> = Promise<T> | T
 
-export interface ISRDocument {
-  [key: string]: unknown
-  _status?: string
-  slug?: string
-}
+type AnyFunction = (...args: unknown[]) => unknown
 
-type RawCollectionAfterOperationArgs = Parameters<CollectionAfterOperationHook<string>>[0]
+type ElementOf<T> = T extends readonly (infer U)[] ? U : never
+
+type RequireAtLeastOne<T, Keys extends keyof T = keyof T> = Keys extends keyof T
+  ? Required<Pick<T, Keys>> & Omit<T, Keys>
+  : never
+
+type RawCollectionAfterOperationArgs<TSlug extends CollectionSlug> = Parameters<
+  CollectionAfterOperationHook<TSlug>
+>[0]
+
+type RawCollectionAfterDeleteArgs<TSlug extends CollectionSlug> = Parameters<
+  CollectionAfterDeleteHook<DataFromCollectionSlug<TSlug>>
+>[0]
+
+type RawGlobalAfterChangeArgs = Parameters<GlobalAfterChangeHook>[0]
 
 export type CollectionContentOperation = 'create' | 'update' | 'updateByID'
 
-export type CollectionAfterOperationArgs<TDoc extends ISRDocument = ISRDocument> = {
-  result: TDoc
+export type CollectionAfterOperationArgs<TSlug extends CollectionSlug = CollectionSlug> = {
+  result: DataFromCollectionSlug<TSlug>
 } & Omit<
   Extract<
-    RawCollectionAfterOperationArgs,
+    RawCollectionAfterOperationArgs<TSlug>,
     {
       operation: CollectionContentOperation
     }
@@ -28,18 +42,19 @@ export type CollectionAfterOperationArgs<TDoc extends ISRDocument = ISRDocument>
   'result'
 >
 
-export type CollectionAfterDeleteArgs<TDoc extends ISRDocument = ISRDocument> = {
-  doc: TDoc
+export type CollectionAfterDeleteArgs<TSlug extends CollectionSlug = CollectionSlug> = {
+  doc: DataFromCollectionSlug<TSlug>
 } & Omit<
-  Parameters<CollectionAfterDeleteHook>[0],
+  RawCollectionAfterDeleteArgs<TSlug>,
   'doc'
 >
 
-export type GlobalAfterChangeArgs<TDoc extends ISRDocument = ISRDocument> = {
-  doc: TDoc
+export type GlobalAfterChangeArgs<TSlug extends GlobalSlug = GlobalSlug> = {
+  doc: DataFromGlobalSlug<TSlug>
+  previousDoc: DataFromGlobalSlug<TSlug>
 } & Omit<
-  Parameters<GlobalAfterChangeHook>[0],
-  'doc'
+  RawGlobalAfterChangeArgs,
+  'doc' | 'previousDoc'
 >
 
 export type RevalidationReason =
@@ -83,44 +98,76 @@ export interface FullRebuildConfig {
   trigger: (context: FullRebuildContext) => MaybePromise<void>
 }
 
-export interface CollectionUnpublishConfig {
+export interface CollectionUnpublishConfig<TSlug extends CollectionSlug = CollectionSlug> {
   enabled?: boolean
-  matcher?: (args: CollectionAfterOperationArgs) => MaybePromise<boolean>
-  pathResolver?: (args: CollectionAfterOperationArgs) => MaybePromise<string[]>
-  referencePathResolver?: (args: CollectionAfterOperationArgs) => MaybePromise<string[]>
-  referenceTagResolver?: (args: CollectionAfterOperationArgs) => MaybePromise<string[]>
-  tagResolver?: (args: CollectionAfterOperationArgs) => MaybePromise<string[]>
+  matcher?: (args: CollectionAfterOperationArgs<TSlug>) => MaybePromise<boolean>
+  pathResolver?: (args: CollectionAfterOperationArgs<TSlug>) => MaybePromise<string[]>
+  referencePathResolver?: (args: CollectionAfterOperationArgs<TSlug>) => MaybePromise<string[]>
+  referenceTagResolver?: (args: CollectionAfterOperationArgs<TSlug>) => MaybePromise<string[]>
+  tagResolver?: (args: CollectionAfterOperationArgs<TSlug>) => MaybePromise<string[]>
 }
 
-export interface CollectionDeleteConfig {
-  pathResolver?: (args: CollectionAfterDeleteArgs) => MaybePromise<string[]>
-  referencePathResolver?: (args: CollectionAfterDeleteArgs) => MaybePromise<string[]>
-  referenceTagResolver?: (args: CollectionAfterDeleteArgs) => MaybePromise<string[]>
-  tagResolver?: (args: CollectionAfterDeleteArgs) => MaybePromise<string[]>
+export interface CollectionDeleteConfig<TSlug extends CollectionSlug = CollectionSlug> {
+  pathResolver?: (args: CollectionAfterDeleteArgs<TSlug>) => MaybePromise<string[]>
+  referencePathResolver?: (args: CollectionAfterDeleteArgs<TSlug>) => MaybePromise<string[]>
+  referenceTagResolver?: (args: CollectionAfterDeleteArgs<TSlug>) => MaybePromise<string[]>
+  tagResolver?: (args: CollectionAfterDeleteArgs<TSlug>) => MaybePromise<string[]>
 }
 
-export interface CollectionISRTarget {
-  onDelete?: CollectionDeleteConfig
-  operations?: ReadonlyArray<CollectionAfterOperationArgs['operation']>
-  pathResolver?: (args: CollectionAfterOperationArgs) => MaybePromise<string[]>
-  probeURL?: (args: CollectionAfterOperationArgs) => MaybePromise<null | string | undefined>
-  referencePathResolver?: (args: CollectionAfterOperationArgs) => MaybePromise<string[]>
-  referenceTagResolver?: (args: CollectionAfterOperationArgs) => MaybePromise<string[]>
-  shouldHandle?: (args: CollectionAfterOperationArgs) => MaybePromise<boolean>
-  slug: string
-  tagResolver?: (args: CollectionAfterOperationArgs) => MaybePromise<string[]>
-  unpublish?: CollectionUnpublishConfig
+type CollectionUpdateResolvers<TSlug extends CollectionSlug> = {
+  pathResolver?: (args: CollectionAfterOperationArgs<TSlug>) => MaybePromise<string[]>
+  probeURL?: (args: CollectionAfterOperationArgs<TSlug>) => MaybePromise<null | string | undefined>
+  referencePathResolver?: (args: CollectionAfterOperationArgs<TSlug>) => MaybePromise<string[]>
+  referenceTagResolver?: (args: CollectionAfterOperationArgs<TSlug>) => MaybePromise<string[]>
+  tagResolver?: (args: CollectionAfterOperationArgs<TSlug>) => MaybePromise<string[]>
 }
 
-export interface GlobalISRTarget {
-  pathResolver?: (args: GlobalAfterChangeArgs) => MaybePromise<string[]>
-  probeURL?: (args: GlobalAfterChangeArgs) => MaybePromise<null | string | undefined>
-  revalidateAllOnChange?: boolean
+type CollectionUpdateStrategy<TSlug extends CollectionSlug> = RequireAtLeastOne<
+  CollectionUpdateResolvers<TSlug>,
+  keyof CollectionUpdateResolvers<TSlug>
+>
+
+export type CollectionISRTarget<TSlug extends CollectionSlug = CollectionSlug> =
+  CollectionUpdateStrategy<TSlug> & {
+  onDelete?: CollectionDeleteConfig<TSlug>
+  operations?: ReadonlyArray<CollectionAfterOperationArgs<TSlug>['operation']>
+  shouldHandle?: (args: CollectionAfterOperationArgs<TSlug>) => MaybePromise<boolean>
+  slug: TSlug
+  unpublish?: CollectionUnpublishConfig<TSlug>
+}
+
+type GlobalUpdateResolvers<TSlug extends GlobalSlug> = {
+  pathResolver?: (args: GlobalAfterChangeArgs<TSlug>) => MaybePromise<string[]>
+  probeURL?: (args: GlobalAfterChangeArgs<TSlug>) => MaybePromise<null | string | undefined>
+  tagResolver?: (args: GlobalAfterChangeArgs<TSlug>) => MaybePromise<string[]>
+}
+
+type GlobalTargetPathStrategy<TSlug extends GlobalSlug> = {
+  revalidateAllOnChange?: false | undefined
   revalidateAllPath?: string
-  shouldHandle?: (args: GlobalAfterChangeArgs) => MaybePromise<boolean>
-  slug: string
-  tagResolver?: (args: GlobalAfterChangeArgs) => MaybePromise<string[]>
+} & RequireAtLeastOne<GlobalUpdateResolvers<TSlug>, keyof GlobalUpdateResolvers<TSlug>>
+
+type GlobalTargetSiteStrategy<TSlug extends GlobalSlug> = {
+  revalidateAllOnChange: true
+  revalidateAllPath?: string
+} & GlobalUpdateResolvers<TSlug>
+
+type GlobalUpdateStrategy<TSlug extends GlobalSlug> =
+  | GlobalTargetPathStrategy<TSlug>
+  | GlobalTargetSiteStrategy<TSlug>
+
+export type GlobalISRTarget<TSlug extends GlobalSlug = GlobalSlug> = GlobalUpdateStrategy<TSlug> & {
+  shouldHandle?: (args: GlobalAfterChangeArgs<TSlug>) => MaybePromise<boolean>
+  slug: TSlug
 }
+
+export type AnyCollectionISRTarget = {
+  [TSlug in CollectionSlug]: CollectionISRTarget<TSlug>
+}[CollectionSlug]
+
+export type AnyGlobalISRTarget = {
+  [TSlug in GlobalSlug]: GlobalISRTarget<TSlug>
+}[GlobalSlug]
 
 export interface LoggerLike {
   error: (...args: unknown[]) => void
@@ -128,12 +175,38 @@ export interface LoggerLike {
   warn: (...args: unknown[]) => void
 }
 
+type HasProbeURL<TTargets> = [Extract<ElementOf<NonNullable<TTargets>>, { probeURL: AnyFunction }>] extends [never]
+  ? false
+  : true
+
+type HasAnyProbeURL<TConfig extends PayloadIsrConfig> = HasProbeURL<TConfig['collections']> extends true
+  ? true
+  : HasProbeURL<TConfig['globals']>
+
+type IsFullRebuildEnabled<TConfig extends PayloadIsrConfig> = TConfig['fullRebuild'] extends undefined
+  ? false
+  : TConfig['fullRebuild'] extends { enabled: false }
+    ? false
+    : true
+
+type FullRebuildProbeConstraint<TConfig extends PayloadIsrConfig> =
+  IsFullRebuildEnabled<TConfig> extends true
+    ? HasAnyProbeURL<TConfig> extends true
+      ? {}
+      : {
+          __payload_isr_error_fullRebuild_requires_probeURL: 'When fullRebuild is enabled, configure probeURL on at least one collection or global target.'
+        }
+    : {}
+
 export type PayloadIsrConfig = {
-  collections?: CollectionISRTarget[]
+  collections?: AnyCollectionISRTarget[]
   disabled?: boolean
   fullRebuild?: FullRebuildConfig
-  globals?: GlobalISRTarget[]
+  globals?: AnyGlobalISRTarget[]
   logger?: LoggerLike
   revalidatePath: RevalidatePathFn
   revalidateTag?: RevalidateTagFn
 }
+
+export type PayloadIsrConfigInput<TConfig extends PayloadIsrConfig> = TConfig &
+  FullRebuildProbeConstraint<TConfig>

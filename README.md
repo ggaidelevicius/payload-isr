@@ -34,8 +34,8 @@ export default buildConfig({
       collections: [
         {
           slug: 'posts',
-          shouldHandle: ({ result }) => result._status === 'published',
           pathResolver: ({ result }) => [`/posts/${result.slug}`, '/posts'],
+          probeURL: ({ result }) => `https://www.example.com/posts/${result.slug}`,
           tagResolver: ({ result }) => ['posts', `post:${result.id}`],
           onDelete: {
             pathResolver: ({ id }) => [`/posts/${id}`, '/posts'],
@@ -65,6 +65,11 @@ export default buildConfig({
 
 `payloadIsr({ ... })`
 
+- `collections` / `globals` callback args are inferred from each target `slug` (using Payload generated types), so invalid field access is caught at compile time.
+- collection/global targets require at least one update strategy at type level:
+  - collection: one of `pathResolver`, `tagResolver`, `referencePathResolver`, `referenceTagResolver`, `probeURL`
+  - global: `revalidateAllOnChange: true` or one of `pathResolver`, `tagResolver`, `probeURL`
+- when `fullRebuild` is enabled, TypeScript enforces at least one `probeURL` on a collection or global target.
 - `disabled?: boolean`
 - `revalidatePath(path, meta)` (required)
 - `revalidateTag?(tag, meta)` (optional)
@@ -85,6 +90,9 @@ export default buildConfig({
 - `probeURL?` URL to check before deciding full rebuild fallback
 - `unpublish?` override unpublish matcher/path/tag behavior
 - `onDelete?` add delete path/tag revalidation behavior
+
+Note:
+- If you do not use Payload drafts, avoid `_status` checks in `shouldHandle`; there may be no status field to inspect.
 
 ### Global target
 
@@ -109,6 +117,8 @@ How it works:
 - plugin probes `probeURL` when configured on a target
 - by default, if probe status is `404`, plugin calls `fullRebuild.trigger(...)`
 - you can override this behavior with `fullRebuild.shouldTrigger(...)`
+- if `fullRebuild` is enabled but no targets provide `probeURL`, no probe runs and rebuild fallback is never reached
+- startup preflight warnings flag duplicate target slugs, missing strategies from dynamic config, tag resolvers without `revalidateTag`, and global `revalidateAllOnChange` conflicts.
 
 Typical production setup:
 - set `enabled: process.env.NODE_ENV === 'production'`

@@ -1,11 +1,14 @@
 import type { CollectionConfig, Config, GlobalConfig } from 'payload'
 
 import type {
+  AnyCollectionISRTarget,
+  AnyGlobalISRTarget,
   CollectionAfterOperationArgs,
   CollectionISRTarget,
   FullRebuildContext,
   GlobalISRTarget,
   PayloadIsrConfig,
+  PayloadIsrConfigInput,
   RevalidationMode,
   RevalidationReason,
 } from './types.js'
@@ -36,6 +39,113 @@ const DEFAULT_COLLECTION_OPERATIONS: ReadonlyArray<CollectionAfterOperationArgs[
   'update',
   'updateByID',
 ]
+
+const isFullRebuildEnabled = (options: PayloadIsrConfig): boolean =>
+  Boolean(options.fullRebuild) && options.fullRebuild?.enabled !== false
+
+const findDuplicateSlugs = <TTarget extends { slug: string }>(targets: TTarget[]): string[] => {
+  const counts = new Map<string, number>()
+
+  for (const target of targets) {
+    counts.set(target.slug, (counts.get(target.slug) ?? 0) + 1)
+  }
+
+  return [...counts.entries()].filter(([, count]) => count > 1).map(([slug]) => slug)
+}
+
+const hasCollectionUpdateStrategy = (target: AnyCollectionISRTarget): boolean =>
+  Boolean(
+    target.pathResolver ||
+      target.tagResolver ||
+      target.referencePathResolver ||
+      target.referenceTagResolver ||
+      target.probeURL,
+  )
+
+const hasGlobalUpdateStrategy = (target: AnyGlobalISRTarget): boolean =>
+  target.revalidateAllOnChange === true || Boolean(target.pathResolver || target.tagResolver || target.probeURL)
+
+const usesTagResolvers = (options: PayloadIsrConfig): boolean =>
+  (options.collections ?? []).some(
+    (target) =>
+      Boolean(
+        target.tagResolver ||
+          target.referenceTagResolver ||
+          target.onDelete?.tagResolver ||
+          target.onDelete?.referenceTagResolver ||
+          target.unpublish?.tagResolver ||
+          target.unpublish?.referenceTagResolver,
+      ),
+  ) || (options.globals ?? []).some((target) => Boolean(target.tagResolver))
+
+const validateRuntimeConfiguration = (options: PayloadIsrConfig): void => {
+  const collectionTargets = options.collections ?? []
+  const globalTargets = options.globals ?? []
+
+  const duplicateCollections = findDuplicateSlugs(collectionTargets)
+  if (duplicateCollections.length > 0) {
+    options.logger?.warn(
+      `[payload-isr] Duplicate collection targets detected: ${duplicateCollections.join(
+        ', ',
+      )}. Hooks may run multiple times for the same slug.`,
+    )
+  }
+
+  const duplicateGlobals = findDuplicateSlugs(globalTargets)
+  if (duplicateGlobals.length > 0) {
+    options.logger?.warn(
+      `[payload-isr] Duplicate global targets detected: ${duplicateGlobals.join(
+        ', ',
+      )}. Hooks may run multiple times for the same slug.`,
+    )
+  }
+
+  const missingCollectionStrategy = collectionTargets
+    .filter((target) => !hasCollectionUpdateStrategy(target))
+    .map((target) => target.slug)
+  if (missingCollectionStrategy.length > 0) {
+    options.logger?.warn(
+      `[payload-isr] Collection targets missing update revalidation strategy (path/tag/probe): ${missingCollectionStrategy.join(
+        ', ',
+      )}.`,
+    )
+  }
+
+  const missingGlobalStrategy = globalTargets
+    .filter((target) => !hasGlobalUpdateStrategy(target))
+    .map((target) => target.slug)
+  if (missingGlobalStrategy.length > 0) {
+    options.logger?.warn(
+      `[payload-isr] Global targets missing revalidation strategy (revalidateAllOnChange/path/tag/probe): ${missingGlobalStrategy.join(
+        ', ',
+      )}.`,
+    )
+  }
+
+  if (usesTagResolvers(options) && !options.revalidateTag) {
+    options.logger?.warn(
+      '[payload-isr] Tag resolvers are configured, but revalidateTag is not provided. Tag revalidation callbacks will be skipped.',
+    )
+  }
+
+  for (const target of globalTargets) {
+    if (target.revalidateAllOnChange && target.pathResolver) {
+      options.logger?.warn(
+        `[payload-isr] Global "${target.slug}" has revalidateAllOnChange enabled; pathResolver is ignored for that target.`,
+      )
+    }
+
+    if (
+      target.revalidateAllOnChange &&
+      target.revalidateAllPath &&
+      !target.revalidateAllPath.startsWith('/')
+    ) {
+      options.logger?.warn(
+        `[payload-isr] Global "${target.slug}" has revalidateAllPath="${target.revalidateAllPath}" which does not start with "/". It will be ignored by path normalization.`,
+      )
+    }
+  }
+}
 
 const isSupportedCollectionOperation = (
   operation: CollectionAfterOperationHookArgs['operation'],
@@ -439,7 +549,7 @@ const applyGlobalTarget = (
 }
 
 export const payloadIsr =
-  (pluginOptions: PayloadIsrConfig) =>
+  <TConfig extends PayloadIsrConfig>(pluginOptions: PayloadIsrConfigInput<TConfig>) =>
   (incomingConfig: Config): Config => {
     if (pluginOptions.disabled) {
       return incomingConfig
@@ -454,6 +564,20 @@ export const payloadIsr =
     const runtimeOptions: PayloadIsrConfig = {
       ...pluginOptions,
       logger: pluginOptions.logger ?? console,
+    }
+
+    validateRuntimeConfiguration(runtimeOptions)
+
+    if (isFullRebuildEnabled(runtimeOptions)) {
+      const hasProbeURLResolver =
+        (runtimeOptions.collections ?? []).some((target) => typeof target.probeURL === 'function') ||
+        (runtimeOptions.globals ?? []).some((target) => typeof target.probeURL === 'function')
+
+      if (!hasProbeURLResolver) {
+        runtimeOptions.logger?.warn(
+          '[payload-isr] fullRebuild is enabled, but no probeURL resolvers are configured. Full rebuild fallback will never run.',
+        )
+      }
     }
 
     for (const collectionTarget of runtimeOptions.collections ?? []) {
