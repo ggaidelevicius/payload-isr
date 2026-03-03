@@ -21,6 +21,8 @@ type CollectionAfterOperationHookFn = NonNullable<
   NonNullable<CollectionConfig['hooks']>['afterOperation']
 >[number]
 
+type CollectionAfterOperationHookArgs = Parameters<CollectionAfterOperationHookFn>[0]
+
 type CollectionAfterDeleteHookFn = NonNullable<
   NonNullable<CollectionConfig['hooks']>['afterDelete']
 >[number]
@@ -34,6 +36,11 @@ const DEFAULT_COLLECTION_OPERATIONS: ReadonlyArray<CollectionAfterOperationArgs[
   'update',
   'updateByID',
 ]
+
+const isSupportedCollectionOperation = (
+  operation: CollectionAfterOperationHookArgs['operation'],
+): operation is CollectionAfterOperationArgs['operation'] =>
+  DEFAULT_COLLECTION_OPERATIONS.includes(operation as CollectionAfterOperationArgs['operation'])
 
 const resolveProbeStatus = async (
   probeURL: string,
@@ -169,36 +176,43 @@ const buildCollectionAfterOperationHook = (
   options: PayloadIsrConfig,
 ): CollectionAfterOperationHookFn => {
   return async (args) => {
+    if (!isSupportedCollectionOperation(args.operation)) {
+      return args.result
+    }
+    const operationArgs = args as unknown as CollectionAfterOperationArgs
     const supportsUnpublish = target.unpublish?.enabled !== false
 
-    if (supportsUnpublish) {
+    if (
+      supportsUnpublish &&
+      (operationArgs.operation === 'update' || operationArgs.operation === 'updateByID')
+    ) {
       const matcher = target.unpublish?.matcher ?? defaultUnpublishMatcher
-      const isUnpublish = await matcher(args)
+      const isUnpublish = await matcher(operationArgs)
 
       if (isUnpublish) {
         const paths = [
           ...(target.unpublish?.pathResolver
-            ? await target.unpublish.pathResolver(args)
+            ? await target.unpublish.pathResolver(operationArgs)
             : target.pathResolver
-              ? await target.pathResolver(args)
+              ? await target.pathResolver(operationArgs)
               : []),
           ...(target.unpublish?.referencePathResolver
-            ? await target.unpublish.referencePathResolver(args)
+            ? await target.unpublish.referencePathResolver(operationArgs)
             : target.referencePathResolver
-              ? await target.referencePathResolver(args)
+              ? await target.referencePathResolver(operationArgs)
               : []),
         ]
 
         const tags = [
           ...(target.unpublish?.tagResolver
-            ? await target.unpublish.tagResolver(args)
+            ? await target.unpublish.tagResolver(operationArgs)
             : target.tagResolver
-              ? await target.tagResolver(args)
+              ? await target.tagResolver(operationArgs)
               : []),
           ...(target.unpublish?.referenceTagResolver
-            ? await target.unpublish.referenceTagResolver(args)
+            ? await target.unpublish.referenceTagResolver(operationArgs)
             : target.referenceTagResolver
-              ? await target.referenceTagResolver(args)
+              ? await target.referenceTagResolver(operationArgs)
               : []),
         ]
 
@@ -221,13 +235,13 @@ const buildCollectionAfterOperationHook = (
     }
 
     const operations = target.operations ?? DEFAULT_COLLECTION_OPERATIONS
-    if (!operations.includes(args.operation)) {
+    if (!operations.includes(operationArgs.operation)) {
       return args.result
     }
 
     const shouldHandle = target.shouldHandle
-      ? await target.shouldHandle(args)
-      : defaultPublishedDocGuard(args.result)
+      ? await target.shouldHandle(operationArgs)
+      : defaultPublishedDocGuard(operationArgs.result)
 
     if (!shouldHandle) {
       return args.result
@@ -235,7 +249,7 @@ const buildCollectionAfterOperationHook = (
 
     const fullRebuildTriggered = await maybeTriggerFullRebuild(options, {
       slug: target.slug,
-      probeURL: target.probeURL ? await target.probeURL(args) : null,
+      probeURL: target.probeURL ? await target.probeURL(operationArgs) : null,
       reason: 'collection-update',
       scope: 'collection',
     })
@@ -247,7 +261,7 @@ const buildCollectionAfterOperationHook = (
     await revalidatePaths(options, {
       slug: target.slug,
       mode: 'path',
-      paths: await resolveCollectionPaths(target, args),
+      paths: await resolveCollectionPaths(target, operationArgs),
       reason: 'collection-update',
       scope: 'collection',
     })
@@ -255,7 +269,7 @@ const buildCollectionAfterOperationHook = (
       slug: target.slug,
       reason: 'collection-update',
       scope: 'collection',
-      tags: await resolveCollectionTags(target, args),
+      tags: await resolveCollectionTags(target, operationArgs),
     })
 
     return args.result

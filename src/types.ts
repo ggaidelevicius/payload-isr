@@ -6,11 +6,41 @@ import type {
 
 export type MaybePromise<T> = Promise<T> | T
 
-export type CollectionAfterOperationArgs = Parameters<CollectionAfterOperationHook<string>>[0]
+export interface ISRDocument {
+  [key: string]: unknown
+  _status?: string
+  slug?: string
+}
 
-export type CollectionAfterDeleteArgs = Parameters<CollectionAfterDeleteHook>[0]
+type RawCollectionAfterOperationArgs = Parameters<CollectionAfterOperationHook<string>>[0]
 
-export type GlobalAfterChangeArgs = Parameters<GlobalAfterChangeHook>[0]
+export type CollectionContentOperation = 'create' | 'update' | 'updateByID'
+
+export type CollectionAfterOperationArgs<TDoc extends ISRDocument = ISRDocument> = {
+  result: TDoc
+} & Omit<
+  Extract<
+    RawCollectionAfterOperationArgs,
+    {
+      operation: CollectionContentOperation
+    }
+  >,
+  'result'
+>
+
+export type CollectionAfterDeleteArgs<TDoc extends ISRDocument = ISRDocument> = {
+  doc: TDoc
+} & Omit<
+  Parameters<CollectionAfterDeleteHook>[0],
+  'doc'
+>
+
+export type GlobalAfterChangeArgs<TDoc extends ISRDocument = ISRDocument> = {
+  doc: TDoc
+} & Omit<
+  Parameters<GlobalAfterChangeHook>[0],
+  'doc'
+>
 
 export type RevalidationReason =
   | 'collection-delete'
@@ -32,7 +62,7 @@ export type RevalidatePathFn = (
 
 export type RevalidateTagFn = (
   tag: string,
-  meta: {
+  meta?: {
     reason: RevalidationReason
     scope: 'collection' | 'global'
     slug: string
