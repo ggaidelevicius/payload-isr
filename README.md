@@ -14,7 +14,7 @@ pnpm add @ggaidelevicius/payload-isr
 
 ```ts
 import { buildConfig } from 'payload'
-import { payloadIsr } from '@ggaidelevicius/payload-isr'
+import { createPayloadIsrLogger, payloadIsr } from '@ggaidelevicius/payload-isr'
 import {
   revalidatePath as nextRevalidatePath,
   revalidateTag as nextRevalidateTag,
@@ -23,6 +23,8 @@ import {
 export default buildConfig({
   plugins: [
     payloadIsr({
+      debug: true,
+      logger: createPayloadIsrLogger(),
       revalidatePath: (path, meta) => {
         if (meta.mode === 'site') {
           return nextRevalidatePath(path, 'layout')
@@ -77,6 +79,10 @@ export default buildConfig({
 - `globals?: GlobalISRTarget[]`
 - `fullRebuild?: { enabled?, shouldTrigger?, trigger }`
 - `logger?: { warn, error, info? }`
+
+For quick setup:
+- use `debug: true`
+- use `logger: createPayloadIsrLogger()`
 
 ### Collection target
 

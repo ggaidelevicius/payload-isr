@@ -1,3 +1,5 @@
+export { createPayloadIsrLogger } from './logger.js'
+export type { PayloadIsrLoggerOptions } from './logger.js'
 export { payloadIsr } from './plugin.js'
 export type {
   CollectionAfterDeleteArgs,
