@@ -1,6 +1,6 @@
 {
   "name": "@ggaidelevicius/payload-isr",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "description": "Payload CMS plugin for ISR-style path revalidation with optional full rebuild fallback",
   "license": "MIT",
   "type": "module",
