@@ -370,8 +370,29 @@ export interface LoggerLike {
   warn: (...args: unknown[]) => void
 }
 
+type PayloadIsrPathCallbackConfig = {
+  /**
+   * Called once for each resolved path after a content change. Typically wraps Next.js `revalidatePath`.
+   * Check `meta.mode` to detect site-wide global revalidation and pass the `'layout'` scope accordingly.
+   */
+  revalidatePath: RevalidatePathFn
+}
+
+type PayloadIsrTagCallbackConfig = {
+  /**
+   * Called once for each resolved cache tag after a content change. Typically wraps Next.js `revalidateTag`.
+   * Omit only when your app does not use tag-based caching.
+   */
+  revalidateTag: RevalidateTagFn
+}
+
+type PayloadIsrRequiredRevalidationCallback =
+  | (Partial<PayloadIsrPathCallbackConfig> & PayloadIsrTagCallbackConfig)
+  | (Partial<PayloadIsrTagCallbackConfig> & PayloadIsrPathCallbackConfig)
+
 /**
  * Top-level plugin options passed to `payloadIsr({ ... })`.
+ * At least one of `revalidatePath` or `revalidateTag` must be provided.
  */
 export type PayloadIsrConfig = {
   /**
@@ -409,14 +430,4 @@ export type PayloadIsrConfig = {
    * filtering of noisy config-level traces.
    */
   logger?: LoggerLike
-  /**
-   * Called once for each resolved path after a content change. Typically wraps Next.js `revalidatePath`.
-   * Check `meta.mode` to detect site-wide global revalidation and pass the `'layout'` scope accordingly.
-   */
-  revalidatePath: RevalidatePathFn
-  /**
-   * Called once for each resolved cache tag after a content change. Typically wraps Next.js `revalidateTag`.
-   * Omit if you don't use cache tags — the plugin skips tag resolution entirely when this is absent.
-   */
-  revalidateTag?: RevalidateTagFn
-}
+} & PayloadIsrRequiredRevalidationCallback

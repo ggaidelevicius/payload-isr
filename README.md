@@ -136,8 +136,8 @@ export default buildConfig({
 
 | Option | Type | Required | Description |
 |---|---|---|---|
-| `revalidatePath` | `(path, meta) => void \| Promise<void>` | Yes | Called for each resolved path. See [Revalidation metadata](#revalidation-metadata). |
-| `revalidateTag` | `(tag, meta?) => void \| Promise<void>` | No | Called for each resolved tag. Omit if you don't use cache tags. |
+| `revalidatePath` | `(path, meta) => void \| Promise<void>` | No* | Called for each resolved path. See [Revalidation metadata](#revalidation-metadata). |
+| `revalidateTag` | `(tag, meta?) => void \| Promise<void>` | No* | Called for each resolved tag. Omit only if you do not use tag-based caching. |
 | `collections` | `CollectionISRTarget[]` | No | Collection revalidation targets. |
 | `globals` | `GlobalISRTarget[]` | No | Global revalidation targets. |
 | `fullRebuild` | `FullRebuildConfig` | No | Full rebuild fallback. See [Full rebuild fallback](#full-rebuild-fallback). |
@@ -145,6 +145,8 @@ export default buildConfig({
 | `debug` | `boolean` | No | Emit structured trace events via `logger.info` for every hook, guard, and branch decision. |
 | `debugURLOrigin` | `string` | No | Base URL prepended to relative paths in debug output, making logged paths absolute and clickable. |
 | `disabled` | `boolean` | No | Disable the plugin entirely without removing it from config. |
+
+`*` At least one of `revalidatePath` or `revalidateTag` is required.
 
 **TypeScript note:** callback args in `collections` and `globals` are inferred from each target's `slug` using Payload's generated types. Invalid field access is caught at compile time. Each target requires at least one revalidation strategy at the type level — the compiler will error if a target has no resolver.
 
@@ -193,7 +195,7 @@ export default buildConfig({
 
 ## Revalidation metadata
 
-Both `revalidatePath` and `revalidateTag` receive a `meta` argument describing why revalidation is happening.
+When configured, both `revalidatePath` and `revalidateTag` receive a `meta` argument describing why revalidation is happening.
 
 ### `revalidatePath(path, meta)`
 
@@ -401,6 +403,7 @@ logger: {
 - Targets with no revalidation strategy
 - Collection targets missing delete strategy (`onDelete`)
 - Collection targets with `onDelete` configured but no resolvers inside it
+- Path resolvers configured without a `revalidatePath` callback
 - `tagResolver` without a `revalidateTag` callback
 - `fullRebuild` enabled with no `probeURL` resolvers
 - `revalidateAllOnChange` and `pathResolver` on the same global target

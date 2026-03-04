@@ -159,6 +159,81 @@ describe('payloadIsr runtime safeguards', () => {
     expect(runtimeWarnings).toHaveLength(1)
   })
 
+  test('supports tag-only configuration without revalidatePath', async () => {
+    const revalidateTag = vi.fn()
+
+    const plugin = payloadIsr({
+      collections: [
+        {
+          slug: 'posts',
+          tagResolver: () => ['posts'],
+        },
+      ],
+      revalidateTag,
+    })
+
+    const config = plugin(createBaseConfig())
+    const afterOperation = config.collections?.[0]?.hooks?.afterOperation?.[0]
+    expect(afterOperation).toBeDefined()
+
+    await afterOperation?.({
+      args: {},
+      operation: 'create',
+      result: {
+        id: '1',
+        slug: 'first-post',
+      },
+    } as never)
+
+    expect(revalidateTag).toHaveBeenCalledWith('posts', {
+      slug: 'posts',
+      reason: 'collection-update',
+      scope: 'collection',
+    })
+  })
+
+  test('warns once per target/reason when paths resolve without revalidatePath callback', async () => {
+    const { lines, logger } = createLoggerRecorder()
+
+    const plugin = payloadIsr({
+      collections: [
+        {
+          slug: 'posts',
+          pathResolver: () => ['/posts'],
+        },
+      ],
+      logger,
+      revalidateTag: () => undefined,
+    })
+
+    const config = plugin(createBaseConfig())
+    const afterOperation = config.collections?.[0]?.hooks?.afterOperation?.[0]
+    expect(afterOperation).toBeDefined()
+
+    await afterOperation?.({
+      args: {},
+      operation: 'create',
+      result: {
+        id: '1',
+        slug: 'first-post',
+      },
+    } as never)
+
+    await afterOperation?.({
+      args: {},
+      operation: 'create',
+      result: {
+        id: '2',
+        slug: 'second-post',
+      },
+    } as never)
+
+    const runtimeWarnings = lines.warn.filter((line) =>
+      line.includes('Paths were resolved for "posts"'),
+    )
+    expect(runtimeWarnings).toHaveLength(1)
+  })
+
   test('warns and skips full-rebuild probe when probeURL is not absolute http(s)', async () => {
     const { lines, logger } = createLoggerRecorder()
     const trigger = vi.fn()

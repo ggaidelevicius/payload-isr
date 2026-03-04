@@ -41,6 +41,7 @@ const DEFAULT_COLLECTION_OPERATIONS: ReadonlyArray<CollectionAfterOperationArgs[
 
 type DebugTraceState = {
   seenConfigEvents: Set<string>
+  seenMissingRevalidatePathWarnings: Set<string>
   seenMissingRevalidateTagWarnings: Set<string>
 }
 
@@ -52,6 +53,7 @@ const getDebugTraceState = (): DebugTraceState => {
   if (!stateHost.__payloadIsrDebugTraceState) {
     stateHost.__payloadIsrDebugTraceState = {
       seenConfigEvents: new Set<string>(),
+      seenMissingRevalidatePathWarnings: new Set<string>(),
       seenMissingRevalidateTagWarnings: new Set<string>(),
     }
   }
@@ -163,6 +165,22 @@ const usesTagResolvers = (options: PayloadIsrConfig): boolean =>
   ) ||
   (options.globals ?? []).filter((target) => target.disabled !== true).some((target) => Boolean(target.tagResolver))
 
+const usesPathResolvers = (options: PayloadIsrConfig): boolean =>
+  (options.collections ?? []).filter((target) => target.disabled !== true).some(
+    (target) =>
+      Boolean(
+        target.pathResolver ||
+          target.referencePathResolver ||
+          target.onDelete?.pathResolver ||
+          target.onDelete?.referencePathResolver ||
+          target.unpublish?.pathResolver ||
+          target.unpublish?.referencePathResolver,
+      ),
+  ) ||
+  (options.globals ?? []).filter((target) => target.disabled !== true).some(
+    (target) => target.revalidateAllOnChange === true || Boolean(target.pathResolver),
+  )
+
 const normalizeProbeURL = (
   options: PayloadIsrConfig,
   args: {
@@ -202,6 +220,7 @@ const validateRuntimeConfiguration = (options: PayloadIsrConfig): void => {
     fullRebuildConfigured: Boolean(options.fullRebuild),
     fullRebuildEnabled: options.fullRebuild?.enabled !== false,
     globalTargetCount: globalTargets.length,
+    hasRevalidatePath: Boolean(options.revalidatePath),
     hasRevalidateTag: Boolean(options.revalidateTag),
   })
 
@@ -264,6 +283,18 @@ const validateRuntimeConfiguration = (options: PayloadIsrConfig): void => {
       `[payload-isr] Global targets missing revalidation strategy (revalidateAllOnChange/path/tag/probe): ${missingGlobalStrategy.join(
         ', ',
       )}.`,
+    )
+  }
+
+  if (!options.revalidatePath && !options.revalidateTag) {
+    options.logger?.warn(
+      '[payload-isr] Neither revalidatePath nor revalidateTag is configured. Revalidation callbacks will be skipped.',
+    )
+  }
+
+  if (usesPathResolvers(options) && !options.revalidatePath) {
+    options.logger?.warn(
+      '[payload-isr] Path resolvers are configured, but revalidatePath is not provided. Path revalidation callbacks will be skipped.',
     )
   }
 
@@ -424,6 +455,22 @@ const revalidatePaths = async (
     reason: args.reason,
     scope: args.scope,
   })
+
+  if (normalizedPaths.length === 0) {
+    return
+  }
+
+  if (!options.revalidatePath) {
+    const state = getDebugTraceState()
+    const warningKey = `${args.slug}:${args.scope}:${args.reason}:${args.mode}`
+    if (!state.seenMissingRevalidatePathWarnings.has(warningKey)) {
+      state.seenMissingRevalidatePathWarnings.add(warningKey)
+      options.logger?.warn(
+        `[payload-isr] Paths were resolved for "${args.slug}", but revalidatePath is not configured. Skipping path revalidation.`,
+      )
+    }
+    return
+  }
 
   for (const path of normalizedPaths) {
     const absolutePath = resolveDebugAbsolutePath(path, options.debugURLOrigin)
