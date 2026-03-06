@@ -158,8 +158,8 @@ export default buildConfig({
 | `disabled` | `boolean` | `false` | Skip this target without removing it from config. |
 | `pathResolver` | `(args) => string[]` | — | Returns paths to revalidate when a document is published or updated. |
 | `tagResolver` | `(args) => string[]` | — | Returns cache tags to invalidate. |
-| `referencePathResolver` | `(args) => string[]` | — | Additional related paths (parent pages, index pages, etc.). Resolved alongside `pathResolver`, not instead of it. |
-| `referenceTagResolver` | `(args) => string[]` | — | Additional related tags. Resolved alongside `tagResolver`. |
+| `referencePathResolver` | `(args) => string[]` | — | Additional paths to revalidate, merged with `pathResolver` results. Use `findReferencingPaths()` here to also bust other pages that embed this document. |
+| `referenceTagResolver` | `(args) => string[]` | — | Additional tags to invalidate, merged with `tagResolver` results. |
 | `probeURL` | `(args) => string` | — | URL to fetch before triggering full rebuild. Required for full rebuild to ever fire on this target. |
 | `operations` | `string[]` | `['create', 'update', 'updateByID']` | Which Payload operations trigger this target. |
 | `shouldHandle` | `(args) => boolean` | Checks `_status === 'published'` (or no `_status` field) | Custom gate. Return `false` to skip revalidation for this operation. |
@@ -299,6 +299,120 @@ Deletes do not trigger revalidation unless `onDelete` is configured on the targe
   },
 }
 ```
+
+## Finding referencing pages
+
+When a document changes, other pages that *embed or reference that document* may also need their cache busted — for example, a `pages` entry that includes a post inside its block layout.
+
+`findReferencingPaths()` handles this automatically. You give it the changed document's ID and the collections/globals to search, and it returns the paths of any documents that contain a reference to it. Use it inside `referencePathResolver`:
+
+```ts
+import { findReferencingPaths, payloadIsr } from '@ggaidelevicius/payload-isr'
+
+{
+  slug: 'posts',
+  pathResolver: ({ result }) => [`/posts/${result.slug}`, '/posts'],
+  referencePathResolver: ({ req, result }) =>
+    findReferencingPaths({
+      payload: req.payload,
+      referencedValues: result.id,
+      targets: {
+        collections: ['pages', 'news'],
+        globals: ['homepage'],
+      },
+      fieldPaths: ['layout'],
+    }),
+}
+```
+
+This fetches candidate documents from `pages`, `news`, and `homepage`, then applies the default published filter before matching references and returning paths.
+
+### How matching works
+
+The helper recursively walks the values at each `fieldPath` (or the roots returned by `getSearchRoots`) and checks whether any string or number matches one of the `referencedValues`. You don't need to account for nesting — the search is depth-unlimited within the extracted roots.
+
+By default, only published documents are candidates (`_status === 'published'`, or docs without `_status`). Override this with `shouldInclude`.
+
+By default, queries run with `depth: 0` and `overrideAccess: true`. This keeps relationship values as IDs (better for stable matching) and avoids access-scoped misses in system-level revalidation. Override with `queryDepth` / `overrideAccess` if your project needs different behavior.
+
+### How paths are resolved
+
+For each matching document, the path is determined by the first of these that applies:
+1. The last URL in its `breadcrumbs` array (if present and starts with `/`)
+2. `/${doc.slug}` (if the document has a non-empty `slug` field)
+3. `/${doc.id}`
+4. `/` — only for globals that have none of the above
+
+Override with `resolvePaths` when your routing doesn't follow this convention. Paths returned by `resolvePaths` must be absolute (start with `/`).
+
+### Telling the helper where to look
+
+The helper doesn't know which fields store your block or relation data — you need to point it there.
+
+**`fieldPaths`** accepts dot-separated paths to the fields that contain block or relation data:
+
+```ts
+fieldPaths: ['layout', 'hero.blocks', 'sidebar.content']
+```
+
+**`getSearchRoots`** is an escape hatch for when references don't live in predictable fields — it receives the full document and returns the values to search:
+
+```ts
+getSearchRoots: (doc, meta) => {
+  // Search the entire document for pages, only the hero section for others
+  if (meta.slug === 'pages') return [doc]
+  return [doc.hero]
+}
+```
+
+When both `fieldPaths` and `getSearchRoots` are provided, their results are combined. At least one is required.
+
+### Custom path resolution
+
+Override `resolvePaths` when the default path convention doesn't match your routing:
+
+```ts
+referencePathResolver: ({ req, result }) =>
+  findReferencingPaths({
+    payload: req.payload,
+    referencedValues: result.id,
+    targets: {
+      collections: ['pages', 'news'],
+    },
+    fieldPaths: ['hero.blocks', 'layout'],
+    resolvePaths: (doc, meta) => {
+      if (meta.slug === 'news' && typeof doc.slug === 'string') {
+        return [`/news/${doc.slug}`]
+      }
+      return typeof doc.slug === 'string' ? [`/${doc.slug}`] : []
+    },
+  })
+```
+
+### Options reference
+
+| Option | Required | Description |
+|---|---|---|
+| `payload` | Yes | Payload instance. Available as `args.req.payload` in hook resolvers. |
+| `referencedValues` | Yes | The ID(s) to search for — typically `result.id`. Accepts a single value or an array; `null`/`undefined` entries are ignored. |
+| `targets` | Yes | `{ collections?, globals? }` — which slugs to scan for references. |
+| `fieldPaths` | One of `fieldPaths`/`getSearchRoots` | Dot-separated field paths to inspect on each candidate document (e.g. `['layout', 'hero.blocks']`). Fields that don't exist on a document are silently skipped. |
+| `getSearchRoots` | One of `fieldPaths`/`getSearchRoots` | Function returning the values to search for a given document. Combined with `fieldPaths` results when both are provided. |
+| `resolvePaths` | No | Custom route mapper for matching documents. Must return absolute paths (starting with `/`). Defaults to: breadcrumb URL → `/${slug}` → `/${id}` → `/` (globals only). |
+| `shouldInclude` | No | Custom filter applied to each candidate document before the reference search runs. Defaults to published docs or docs without `_status`. |
+| `queryDepth` | No | Depth passed to Payload queries. Defaults to `0`. Increase if you intentionally want populated relationship objects in the search roots. |
+| `overrideAccess` | No | Whether to bypass access control when scanning candidates. Defaults to `true` to avoid missed revalidation due to user-scoped access. |
+| `logger` | No | Logger for warnings from the helper (failed queries, non-absolute paths). Defaults to `console`. Pass the same logger you configured on the plugin to keep output consistent. |
+
+### Database adapter notes
+
+**MongoDB** — MongoDB stores relationship IDs embedded within each document's structure. There is no join table or foreign-key index to reverse-query, so finding "all pages that reference post X" requires a full collection scan regardless. `findReferencingPaths` is the practical solution here.
+
+**PostgreSQL / SQLite** — Payload's SQL adapters store relationships in dedicated join tables (e.g. `pages_rels`). In principle you could query those tables directly to find referencing documents without fetching full documents. `findReferencingPaths` doesn't do this — it uses `payload.find()` and scans the returned documents in memory, which is database-agnostic but less targeted than a raw SQL query. For large collections on a SQL adapter, a direct Drizzle query against the `_rels` table would be more efficient, though it requires knowing Payload's internal table naming conventions (which vary by collection and field structure).
+
+### Performance note
+
+`findReferencingPaths` fetches every document in each target collection on every publish event. Keep `targets` narrow — only include collections that actually store references to the changed document type.
 
 ## Full rebuild fallback
 

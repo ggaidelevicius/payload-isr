@@ -6,9 +6,20 @@ import type {
   DataFromGlobalSlug,
   GlobalAfterChangeHook,
   GlobalSlug,
+  Payload,
 } from 'payload'
 
 export type MaybePromise<T> = Promise<T> | T
+
+export interface ISRDocument {
+  [key: string]: unknown
+  _status?: null | string
+  breadcrumbs?: null | ReadonlyArray<{
+    url?: null | string
+  }>
+  id?: number | string
+  slug?: null | string
+}
 
 type RequireAtLeastOne<T, Keys extends keyof T = keyof T> = Keys extends keyof T
   ? Omit<T, Keys> & Required<Pick<T, Keys>>
@@ -369,6 +380,129 @@ export interface LoggerLike {
   /** Receives plugin warnings (e.g. startup preflight issues). Defaults to `console.warn` when no logger is supplied. */
   warn: (...args: unknown[]) => void
 }
+
+export interface ReferencingDocumentTarget {
+  /**
+   * Collection slugs to scan for published documents whose content references the changed document.
+   */
+  collections?: ReadonlyArray<CollectionSlug>
+  /**
+   * Global slugs to scan for published documents whose content references the changed document.
+   */
+  globals?: ReadonlyArray<GlobalSlug>
+}
+
+export interface ReferencingDocumentMeta {
+  /**
+   * Whether the matching document came from a collection or a global target.
+   */
+  scope: 'collection' | 'global'
+  /**
+   * Collection/global slug that produced the matching document.
+   */
+  slug: string
+}
+
+type FindReferencingPathsBaseOptions = {
+  /**
+   * Optional logger for warnings emitted by the helper (e.g. failed queries, non-absolute paths).
+   * Defaults to `console` when omitted. Pass the same logger you configured on the plugin to keep
+   * output consistent.
+   */
+  logger?: LoggerLike
+  /**
+   * Whether to bypass Payload access control when scanning candidate documents.
+   * Defaults to `true` to avoid missing revalidations due to user-scoped access restrictions.
+   */
+  overrideAccess?: boolean
+  /**
+   * Payload instance used to query candidate collection/global documents.
+   * In hook resolvers this is usually available as `args.req.payload`.
+   */
+  payload: Payload
+  /**
+   * Depth passed to `payload.find()` / `payload.findGlobal()`.
+   * Defaults to `0` so relationship fields remain IDs and matching stays focused on direct stored references.
+   */
+  queryDepth?: number
+  /**
+   * Changed document value(s) to search for.
+   * Commonly this is `result.id` or `doc.id`.
+   */
+  referencedValues:
+    | null
+    | number
+    | ReadonlyArray<null | number | string | undefined>
+    | string
+    | undefined
+  /**
+   * Collections/globals that may contain references to the changed document.
+   */
+  targets: ReferencingDocumentTarget
+}
+
+type FindReferencingPathsFieldPathStrategy<TDoc extends ISRDocument> = {
+  /**
+   * Dot-separated field paths to inspect on each candidate document.
+   * Use this when references live in known fields such as `layout`, `hero.blocks`, or `content.sections`.
+   */
+  fieldPaths: ReadonlyArray<string>
+  /**
+   * Custom search-root extractor. When provided, this is used alongside `fieldPaths`.
+   */
+  getSearchRoots?: (doc: TDoc, meta: ReferencingDocumentMeta) => ReadonlyArray<unknown>
+  /**
+   * Custom path resolver for matching documents.
+   * Defaults to: last breadcrumb URL, then `/${slug}`, then `/${id}`, and finally `/` for globals.
+   */
+  resolvePaths?: (
+    doc: TDoc,
+    meta: ReferencingDocumentMeta,
+  ) => MaybePromise<string[]>
+  /**
+   * Optional inclusion guard for candidate documents.
+   * Defaults to published docs (`_status === 'published'`) or docs without `_status`.
+   */
+  shouldInclude?: (
+    doc: TDoc,
+    meta: ReferencingDocumentMeta,
+  ) => MaybePromise<boolean>
+}
+
+type FindReferencingPathsRootStrategy<TDoc extends ISRDocument> = {
+  /**
+   * Dot-separated field paths to inspect on each candidate document.
+   * Optional when `getSearchRoots` already covers all relevant content.
+   */
+  fieldPaths?: ReadonlyArray<string>
+  /**
+   * Custom search-root extractor for cases where references do not live in a fixed set of field paths.
+   */
+  getSearchRoots: (doc: TDoc, meta: ReferencingDocumentMeta) => ReadonlyArray<unknown>
+  /**
+   * Custom path resolver for matching documents.
+   * Defaults to: last breadcrumb URL, then `/${slug}`, then `/${id}`, and finally `/` for globals.
+   */
+  resolvePaths?: (
+    doc: TDoc,
+    meta: ReferencingDocumentMeta,
+  ) => MaybePromise<string[]>
+  /**
+   * Optional inclusion guard for candidate documents.
+   * Defaults to published docs (`_status === 'published'`) or docs without `_status`.
+   */
+  shouldInclude?: (
+    doc: TDoc,
+    meta: ReferencingDocumentMeta,
+  ) => MaybePromise<boolean>
+}
+
+export type FindReferencingPathsSearchStrategy<TDoc extends ISRDocument = ISRDocument> =
+  | FindReferencingPathsFieldPathStrategy<TDoc>
+  | FindReferencingPathsRootStrategy<TDoc>
+
+export type FindReferencingPathsOptions<TDoc extends ISRDocument = ISRDocument> =
+  FindReferencingPathsBaseOptions & FindReferencingPathsSearchStrategy<TDoc>
 
 type PayloadIsrPathCallbackConfig = {
   /**
