@@ -20,8 +20,8 @@ npm install @ggaidelevicius/payload-isr
 
 The plugin registers Payload `afterOperation` and `afterChange` hooks on whichever collections and globals you configure. When a hook fires:
 
-1. **Publish check** — `shouldHandle` decides whether the document should trigger revalidation (default: document has no `_status` field, or `_status === 'published'`)
-2. **Unpublish check** — if an update sets a document from published to draft, unpublish-specific resolvers fire instead of update resolvers
+1. **Unpublish check (collections)** — for `update` / `updateByID`, `unpublish.matcher` is evaluated first. If it matches, unpublish-specific resolvers fire (falling back to the main resolvers if unpublish-specific ones are not provided), and `shouldHandle` is not consulted for that operation.
+2. **Publish/update check** — for non-unpublish operations, `shouldHandle` decides whether the document should trigger revalidation (default: document has no `_status` field, or `_status === 'published'`)
 3. **Probe** — if `probeURL` is configured and `fullRebuild` is enabled, the plugin fetches that URL; a `404` triggers the full rebuild path and skips path/tag revalidation
 4. **Revalidate** — resolved paths are passed to your `revalidatePath` callback; resolved tags are passed to your `revalidateTag` callback
 
@@ -242,7 +242,7 @@ meta?: {
 
 These are the defaults to be aware of — getting them wrong is a common source of missed revalidation:
 
-**`shouldHandle`** — defaults to `doc._status === 'published'` or, if the document has no `_status` field at all, `true`. If you don't use Payload drafts, every publish/update will pass the default guard automatically. If you do use drafts, only published docs trigger revalidation by default. Override with a custom `shouldHandle` to change this.
+**`shouldHandle`** — defaults to `doc._status === 'published'` or, if the document has no `_status` field at all, `true`. If you don't use Payload drafts, every publish/update will pass the default guard automatically. If you do use drafts, only published docs trigger revalidation by default. Override with a custom `shouldHandle` to change this. Note: collection unpublish handling runs before this guard.
 
 **`operations`** — defaults to `['create', 'update', 'updateByID']`. Custom Payload operations are not included. Override if you need to respond to additional operation types.
 
@@ -258,9 +258,9 @@ These are the defaults to be aware of — getting them wrong is a common source 
 
 ## Unpublish detection
 
-When a collection update is detected as an unpublish (a document transitioning from published to draft), the plugin uses unpublish-specific resolvers if provided, falling back to the main resolvers.
+When a collection update is detected as an unpublish, the plugin uses unpublish-specific resolvers if provided, falling back to the main resolvers.
 
-Default unpublish matcher: the operation must be `updateByID` and request data must include `_status: 'draft'`. Extra fields are allowed.
+Default unpublish matcher: the operation must be `updateByID` and request data must include `_status: 'draft'`. Extra fields are allowed. This is an update-to-draft signal and does not strictly validate previous persisted state.
 
 If your app uses a different field to control publish state (e.g. `isPublished: boolean`), provide a custom `unpublish.matcher`:
 
