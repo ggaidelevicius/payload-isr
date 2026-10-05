@@ -7,6 +7,7 @@ import type {
   GlobalAfterChangeHook,
   GlobalSlug,
   Payload,
+  PayloadRequest,
 } from 'payload'
 
 export type MaybePromise<T> = Promise<T> | T
@@ -42,7 +43,7 @@ export type CollectionContentOperation = 'create' | 'update' | 'updateByID'
  * Includes only content operations (`create`, `update`, `updateByID`).
  */
 export type CollectionAfterOperationArgs<TSlug extends CollectionSlug = CollectionSlug> = {
-  /** Updated document result for the operation. */
+  /** Updated document. Bulk updates invoke each callback once per successful document. */
   result: DataFromCollectionSlug<TSlug>
 } & Omit<
   Extract<
@@ -145,6 +146,12 @@ export interface FullRebuildConfig {
    */
   enabled?: boolean
   /**
+   * Maximum probe duration in milliseconds. Defaults to 10,000.
+   * Must be finite, positive, and at most 2,147,483,647. Failed or timed-out probes fall back to normal revalidation
+   * unless `shouldTrigger` explicitly handles a `null` probe status.
+   */
+  probeTimeoutMs?: number
+  /**
    * Override the condition under which a rebuild fires. Defaults to `context.probeStatus === 404`.
    * Use this when you need to trigger on additional status codes, or when you want to apply custom
    * logic beyond a simple HTTP check — for example, inspecting the slug or reason before deciding.
@@ -171,7 +178,7 @@ export interface CollectionUnpublishConfig<TSlug extends CollectionSlug = Collec
   /**
    * Custom unpublish detector. Override when your publish model does not use Payload's `_status` field —
    * for example, if you control publish state with a boolean like `isPublished`.
-   * The default matcher looks for `operation === 'updateByID'` with `_status: 'draft'` in the request data.
+   * The default matcher looks for `update` or `updateByID` with `_status: 'draft'` in the request data.
    */
   matcher?: (args: CollectionAfterOperationArgs<TSlug>) => MaybePromise<boolean>
   /**
@@ -269,8 +276,8 @@ export type CollectionISRTarget<TSlug extends CollectionSlug = CollectionSlug> =
   onDelete?: CollectionDeleteConfig<TSlug>
   /**
    * Which Payload operations should trigger this target.
-   * Defaults to `['create', 'update', 'updateByID']`. Override if you use custom Payload operations
-   * or want to narrow the target to specific operation types.
+   * Defaults to `['create', 'update', 'updateByID']`. Override to narrow the target to specific
+   * content operation types. Unpublish matching runs before this filter.
    */
   operations?: ReadonlyArray<CollectionAfterOperationArgs<TSlug>['operation']>
   /**
@@ -435,6 +442,11 @@ type FindReferencingPathsBaseOptions = {
     | ReadonlyArray<null | number | string | undefined>
     | string
     | undefined
+  /**
+   * Originating Payload request. Pass the hook's `req` to preserve its transaction, locale,
+   * user, and context while querying references. Access control remains governed by `overrideAccess`.
+   */
+  req?: Partial<PayloadRequest>
   /**
    * Collections/globals that may contain references to the changed document.
    */

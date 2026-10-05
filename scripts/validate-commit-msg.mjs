@@ -1,15 +1,16 @@
 import fs from 'node:fs'
 
 const commitMsgFile = process.argv[2]
+const printBump = process.argv[3] === '--print-bump'
 
-if (!commitMsgFile) {
-  console.error('[payload-isr] commit-msg validation requires a commit message file path.')
+if (!commitMsgFile || process.argv.length > 4 || (process.argv[3] && !printBump)) {
+  console.error('[payload-isr] Usage: validate-commit-msg.mjs <message-file> [--print-bump]')
   process.exit(1)
 }
 
 const message = fs.readFileSync(commitMsgFile, 'utf8')
 
-if (!message.includes('(release')) {
+if (!message.includes('(release') && !printBump) {
   process.exit(0)
 }
 
@@ -19,14 +20,14 @@ const allowedMarkers = new Set([
   '(release:major)',
 ])
 
-const foundMarkers = [...message.matchAll(/\(release:[^)]+\)/g)].map((match) => match[0])
-const validMarkers = foundMarkers.filter((marker) => allowedMarkers.has(marker))
-const invalidMarkers = foundMarkers.filter((marker) => !allowedMarkers.has(marker))
+// Include malformed and unclosed markers so a valid marker cannot hide a typo.
+const foundMarkers = message.match(/\(release[^)]*(?:\)|$)/g) ?? []
+const marker = foundMarkers[0]
 
-const hasValidSingleMarker = validMarkers.length === 1
-const hasInvalidMarkers = invalidMarkers.length > 0
-
-if (hasValidSingleMarker && !hasInvalidMarkers) {
+if (foundMarkers.length === 1 && allowedMarkers.has(marker)) {
+  if (printBump) {
+    console.log(marker.slice('(release:'.length, -1))
+  }
   process.exit(0)
 }
 

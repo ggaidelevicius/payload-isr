@@ -30,11 +30,11 @@ const buildSnapshot = () => {
   }
 }
 
-export const GET = async () => {
+export const GET = () => {
   return Response.json(buildSnapshot())
 }
 
-export const DELETE = async () => {
+export const DELETE = () => {
   clearRevalidationEvents()
   return Response.json({
     cleared: true,

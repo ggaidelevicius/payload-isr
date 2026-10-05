@@ -3,6 +3,9 @@ import type { Payload } from 'payload'
 import { getPayload } from 'payload'
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 
+import type { MemoryDatabase } from './helpers/memoryDatabase.js'
+
+import { getOrCreateMemoryDatabase, stopMemoryDatabase } from './helpers/memoryDatabase.js'
 import {
   clearRevalidationEvents,
   getFullRebuildEvents,
@@ -12,21 +15,45 @@ import {
 } from './helpers/revalidationRecorder.js'
 
 let payload: Payload
+let memoryDatabase: MemoryDatabase | undefined
 const originalFetch = globalThis.fetch
+const originalEnvironment = {
+  DATABASE_URL: process.env.DATABASE_URL,
+  PAYLOAD_ISR_FULL_REBUILD: process.env.PAYLOAD_ISR_FULL_REBUILD,
+  ROOT_DIR: process.env.ROOT_DIR,
+}
 
 beforeAll(async () => {
   process.env.PAYLOAD_ISR_FULL_REBUILD = '1'
+  memoryDatabase = await getOrCreateMemoryDatabase()
   const { default: config } = await import('@payload-config')
   payload = await getPayload({ config })
 })
 
 beforeEach(() => {
-  globalThis.fetch = vi.fn(async () => new Response(null, { status: 200 })) as typeof fetch
+  globalThis.fetch = vi.fn(() => Promise.resolve(new Response(null, { status: 200 })))
   clearRevalidationEvents()
 })
 
-afterAll(() => {
-  globalThis.fetch = originalFetch
+afterAll(async () => {
+  try {
+    await payload?.destroy()
+  } finally {
+    try {
+      if (memoryDatabase) {
+        await stopMemoryDatabase(memoryDatabase)
+      }
+    } finally {
+      globalThis.fetch = originalFetch
+      for (const [name, value] of Object.entries(originalEnvironment)) {
+        if (value === undefined) {
+          delete process.env[name]
+        } else {
+          process.env[name] = value
+        }
+      }
+    }
+  }
 })
 
 describe('Plugin integration tests', () => {
@@ -57,7 +84,7 @@ describe('Plugin integration tests', () => {
       'posts',
       `post:${post.id}`,
     ])
-    expect(tagEvents.every((event) => event.meta.reason === 'collection-update')).toBe(
+    expect(tagEvents.every((event) => event.meta?.reason === 'collection-update')).toBe(
       true,
     )
   })
@@ -85,6 +112,78 @@ describe('Plugin integration tests', () => {
           event.details.slug === 'posts',
       ),
     ).toBe(true)
+  })
+
+  test('revalidates each published document returned by a bulk update', async () => {
+    const posts = await Promise.all([true, true, false].map((isPublished, index) =>
+      payload.create({
+        collection: 'posts',
+        data: {
+          slug: `bulk-update-${index}`,
+          isPublished,
+          title: `Bulk update ${index}`,
+        },
+      }),
+    ))
+    clearRevalidationEvents()
+
+    const result = await payload.update({
+      collection: 'posts',
+      data: { title: 'Updated in bulk' },
+      where: { id: { in: posts.map((post) => post.id) } },
+    })
+
+    expect(result.errors).toEqual([])
+    expect(result.docs).toHaveLength(3)
+    const publishedPosts = posts.filter((post) => post.isPublished)
+    expect(getPathRevalidationEvents().map((event) => event.path).sort()).toEqual(
+      publishedPosts.flatMap((post) => [
+        `/posts/${post.slug}`, `/posts/${post.id}`, '/posts',
+      ]).sort(),
+    )
+    expect(getTagRevalidationEvents().map((event) => event.tag).sort()).toEqual(
+      publishedPosts.flatMap((post) => ['posts', `post:${post.id}`]).sort(),
+    )
+    expect(getPathRevalidationEvents().every((event) =>
+      event.meta.reason === 'collection-update',
+    )).toBe(true)
+  })
+
+  test('revalidates each document unpublished by a bulk update', async () => {
+    const posts = await Promise.all([0, 1].map((index) =>
+      payload.create({
+        collection: 'posts',
+        data: {
+          slug: `bulk-unpublish-${index}`,
+          isPublished: true,
+          title: `Bulk unpublish ${index}`,
+        },
+      }),
+    ))
+    clearRevalidationEvents()
+
+    const result = await payload.update({
+      collection: 'posts',
+      data: { isPublished: false },
+      where: { id: { in: posts.map((post) => post.id) } },
+    })
+
+    expect(result.errors).toEqual([])
+    expect(result.docs).toHaveLength(2)
+    expect(getPathRevalidationEvents().map((event) => event.path).sort()).toEqual(
+      posts.flatMap((post) => [
+        `/posts/${post.slug}`, `/posts/${post.id}`, '/posts',
+      ]).sort(),
+    )
+    expect(getTagRevalidationEvents().map((event) => event.tag).sort()).toEqual(
+      posts.flatMap((post) => ['posts', `post:${post.id}`]).sort(),
+    )
+    expect(getPathRevalidationEvents().every((event) =>
+      event.meta.reason === 'collection-unpublish',
+    )).toBe(true)
+    expect(getTagRevalidationEvents().every((event) =>
+      event.meta?.reason === 'collection-unpublish',
+    )).toBe(true)
   })
 
   test('revalidates collection paths and tags when unpublishing', async () => {
@@ -124,7 +223,7 @@ describe('Plugin integration tests', () => {
       'posts',
       `post:${post.id}`,
     ])
-    expect(tagEvents.every((event) => event.meta.reason === 'collection-unpublish')).toBe(
+    expect(tagEvents.every((event) => event.meta?.reason === 'collection-unpublish')).toBe(
       true,
     )
   })
@@ -163,7 +262,7 @@ describe('Plugin integration tests', () => {
       'posts',
       `post:${post.id}`,
     ])
-    expect(tagEvents.every((event) => event.meta.reason === 'collection-delete')).toBe(
+    expect(tagEvents.every((event) => event.meta?.reason === 'collection-delete')).toBe(
       true,
     )
   })
@@ -200,7 +299,7 @@ describe('Plugin integration tests', () => {
   })
 
   test('triggers full rebuild fallback when probe returns 404 on publish', async () => {
-    globalThis.fetch = vi.fn(async () => new Response(null, { status: 404 })) as typeof fetch
+    globalThis.fetch = vi.fn(() => Promise.resolve(new Response(null, { status: 404 })))
 
     const post = await payload.create({
       collection: 'posts',
@@ -241,7 +340,7 @@ describe('Plugin integration tests', () => {
     expect(pathEvents.every((event) => event.meta.mode === 'site')).toBe(true)
 
     expect(tagEvents.map((event) => event.tag)).toEqual(['site-settings', 'global'])
-    expect(tagEvents.every((event) => event.meta.reason === 'global-update')).toBe(
+    expect(tagEvents.every((event) => event.meta?.reason === 'global-update')).toBe(
       true,
     )
   })

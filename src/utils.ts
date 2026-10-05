@@ -64,7 +64,7 @@ export const defaultPublishedDocGuard = (doc: unknown): boolean => {
 }
 
 export const defaultUnpublishMatcher = (args: CollectionAfterOperationArgs): boolean => {
-  if (args.operation !== 'updateByID') {
+  if (args.operation !== 'update' && args.operation !== 'updateByID') {
     return false
   }
 

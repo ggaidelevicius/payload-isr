@@ -45,20 +45,21 @@ type DebugTraceState = {
   seenMissingRevalidateTagWarnings: Set<string>
 }
 
-const getDebugTraceState = (): DebugTraceState => {
-  const stateHost = globalThis as {
-    __payloadIsrDebugTraceState?: DebugTraceState
-  }
+const debugTraceStates = new WeakMap<PayloadIsrConfig, DebugTraceState>()
 
-  if (!stateHost.__payloadIsrDebugTraceState) {
-    stateHost.__payloadIsrDebugTraceState = {
+const getDebugTraceState = (options: PayloadIsrConfig): DebugTraceState => {
+  let state = debugTraceStates.get(options)
+
+  if (!state) {
+    state = {
       seenConfigEvents: new Set<string>(),
       seenMissingRevalidatePathWarnings: new Set<string>(),
       seenMissingRevalidateTagWarnings: new Set<string>(),
     }
+    debugTraceStates.set(options, state)
   }
 
-  return stateHost.__payloadIsrDebugTraceState
+  return state
 }
 
 const isFullRebuildEnabled = (options: PayloadIsrConfig): boolean =>
@@ -87,7 +88,7 @@ const logDebugTrace = (
   }
 
   if (event.startsWith('config.')) {
-    const state = getDebugTraceState()
+    const state = getDebugTraceState(options)
     const slug = typeof details.slug === 'string' ? details.slug : ''
     const key = `${event}:${slug}`
 
@@ -212,7 +213,27 @@ const normalizeProbeURL = (
   return probeURL
 }
 
+const DEFAULT_PROBE_TIMEOUT_MS = 10_000
+
+const resolveProbeTimeoutMs = (configuredTimeout: number | undefined): number =>
+  typeof configuredTimeout === 'number' &&
+  Number.isFinite(configuredTimeout) &&
+  configuredTimeout > 0 &&
+  configuredTimeout <= 2_147_483_647
+    ? configuredTimeout
+    : DEFAULT_PROBE_TIMEOUT_MS
+
 const validateRuntimeConfiguration = (options: PayloadIsrConfig): void => {
+  const configuredTimeout = options.fullRebuild?.probeTimeoutMs
+  if (
+    configuredTimeout !== undefined &&
+    resolveProbeTimeoutMs(configuredTimeout) !== configuredTimeout
+  ) {
+    options.logger?.warn(
+      `[payload-isr] fullRebuild.probeTimeoutMs must be a finite positive number no greater than 2147483647. Using ${DEFAULT_PROBE_TIMEOUT_MS}ms.`,
+    )
+  }
+
   const collectionTargets = (options.collections ?? []).filter((target) => target.disabled !== true)
   const globalTargets = (options.globals ?? []).filter((target) => target.disabled !== true)
   logDebugTrace(options, 'config.validate.start', {
@@ -334,10 +355,16 @@ const resolveProbeStatus = async (
   probeURL: string,
   options: PayloadIsrConfig,
 ): Promise<null | number> => {
-  logDebugTrace(options, 'fullRebuild.probe.start', { probeURL })
+  const timeoutMs = resolveProbeTimeoutMs(options.fullRebuild?.probeTimeoutMs)
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+  logDebugTrace(options, 'fullRebuild.probe.start', { probeURL, timeoutMs })
 
   try {
-    const response = await fetch(probeURL)
+    const response = await fetch(probeURL, { signal: controller.signal })
+    // Only the status is used. Release the stream so repeated probes do not
+    // leave unused response bodies and connections open.
+    await response.body?.cancel().catch(() => undefined)
     logDebugTrace(options, 'fullRebuild.probe.complete', {
       probeStatus: response.status,
       probeURL,
@@ -350,6 +377,8 @@ const resolveProbeStatus = async (
     )
     logDebugTrace(options, 'fullRebuild.probe.failed', { probeURL })
     return null
+  } finally {
+    clearTimeout(timeout)
   }
 }
 
@@ -461,7 +490,7 @@ const revalidatePaths = async (
   }
 
   if (!options.revalidatePath) {
-    const state = getDebugTraceState()
+    const state = getDebugTraceState(options)
     const warningKey = `${args.slug}:${args.scope}:${args.reason}:${args.mode}`
     if (!state.seenMissingRevalidatePathWarnings.has(warningKey)) {
       state.seenMissingRevalidatePathWarnings.add(warningKey)
@@ -520,7 +549,7 @@ const revalidateTags = async (
   }
 
   if (!options.revalidateTag) {
-    const state = getDebugTraceState()
+    const state = getDebugTraceState(options)
     const warningKey = `${args.slug}:${args.scope}:${args.reason}`
     if (!state.seenMissingRevalidateTagWarnings.has(warningKey)) {
       state.seenMissingRevalidateTagWarnings.add(warningKey)
@@ -568,25 +597,17 @@ const resolveCollectionTags = async (
   return [...baseTags, ...referenceTags]
 }
 
-const buildCollectionAfterOperationHook = (
+const buildCollectionDocumentOperationHandler = (
   target: CollectionISRTarget,
   options: PayloadIsrConfig,
-): CollectionAfterOperationHookFn => {
-  return async (args) => {
+): ((args: CollectionAfterOperationArgs) => Promise<void>) => {
+  return async (operationArgs) => {
     logDebugTrace(options, 'collection.afterOperation.enter', {
       slug: target.slug,
-      documentId: getDocumentId(args.result),
-      operation: args.operation,
+      documentId: getDocumentId(operationArgs.result),
+      operation: operationArgs.operation,
     })
 
-    if (!isSupportedCollectionOperation(args.operation)) {
-      logDebugTrace(options, 'collection.afterOperation.skip.unsupportedOperation', {
-        slug: target.slug,
-        operation: args.operation,
-      })
-      return args.result
-    }
-    const operationArgs = args as unknown as CollectionAfterOperationArgs
     const supportsUnpublish = target.unpublish?.enabled !== false
 
     logDebugTrace(options, 'collection.afterOperation.unpublish.check', {
@@ -657,7 +678,7 @@ const buildCollectionAfterOperationHook = (
         logDebugTrace(options, 'collection.afterOperation.unpublish.complete', {
           slug: target.slug,
         })
-        return args.result
+        return
       }
     }
 
@@ -668,7 +689,7 @@ const buildCollectionAfterOperationHook = (
         enabledOperations: operations,
         operation: operationArgs.operation,
       })
-      return args.result
+      return
     }
 
     const shouldHandle = target.shouldHandle
@@ -686,10 +707,12 @@ const buildCollectionAfterOperationHook = (
         slug: target.slug,
         operation: operationArgs.operation,
       })
-      return args.result
+      return
     }
 
-    const probeURL = target.probeURL ? await target.probeURL(operationArgs) : null
+    const probeURL = isFullRebuildEnabled(options) && target.probeURL
+      ? await target.probeURL(operationArgs)
+      : null
     logDebugTrace(options, 'collection.afterOperation.probeURL.resolved', {
       slug: target.slug,
       hasProbeURL: Boolean(probeURL),
@@ -709,7 +732,7 @@ const buildCollectionAfterOperationHook = (
         slug: target.slug,
         operation: operationArgs.operation,
       })
-      return args.result
+      return
     }
 
     const paths = await resolveCollectionPaths(target, operationArgs)
@@ -739,6 +762,34 @@ const buildCollectionAfterOperationHook = (
       slug: target.slug,
       operation: operationArgs.operation,
     })
+  }
+}
+
+const buildCollectionAfterOperationHook = (
+  target: CollectionISRTarget,
+  options: PayloadIsrConfig,
+): CollectionAfterOperationHookFn => {
+  const handleDocument = buildCollectionDocumentOperationHandler(target, options)
+
+  return async (args) => {
+    if (!isSupportedCollectionOperation(args.operation)) {
+      logDebugTrace(options, 'collection.afterOperation.skip.unsupportedOperation', {
+        slug: target.slug,
+        operation: args.operation,
+      })
+      return args.result
+    }
+
+    // Payload returns a bulk result for `update`; resolvers always receive one
+    // successfully updated document, including its own publish state.
+    const documents = args.operation === 'update' ? args.result.docs : [args.result]
+    for (const document of documents) {
+      await handleDocument({
+        ...args,
+        result: document,
+      } as unknown as CollectionAfterOperationArgs)
+    }
+
     return args.result
   }
 }
@@ -829,7 +880,9 @@ const buildGlobalAfterChangeHook = (
       return args.doc
     }
 
-    const probeURL = target.probeURL ? await target.probeURL(args) : null
+    const probeURL = isFullRebuildEnabled(options) && target.probeURL
+      ? await target.probeURL(args)
+      : null
     logDebugTrace(options, 'global.afterChange.probeURL.resolved', {
       slug: target.slug,
       hasProbeURL: Boolean(probeURL),
@@ -899,7 +952,7 @@ const buildGlobalAfterChangeHook = (
 const applyCollectionTarget = (
   config: Config,
   options: PayloadIsrConfig,
-  target: CollectionISRTarget,
+  target: AnyCollectionISRTarget,
 ): void => {
   if (target.disabled) {
     logDebugTrace(options, 'config.applyCollectionTarget.skip.disabled', {
@@ -922,6 +975,9 @@ const applyCollectionTarget = (
     return
   }
 
+  // Hooks are attached only to the matching slug, so Payload supplies the
+  // document type expected by this target's collection-specific callbacks.
+  const runtimeTarget = target as CollectionISRTarget
   const existingCollection = config.collections[index]
   const hooks = {
     ...(existingCollection.hooks ?? {}),
@@ -929,13 +985,13 @@ const applyCollectionTarget = (
 
   hooks.afterOperation = [
     ...(hooks.afterOperation ?? []),
-    buildCollectionAfterOperationHook(target, options),
+    buildCollectionAfterOperationHook(runtimeTarget, options),
   ]
 
   if (target.onDelete) {
     hooks.afterDelete = [
       ...(hooks.afterDelete ?? []),
-      buildCollectionAfterDeleteHook(target, options),
+      buildCollectionAfterDeleteHook(runtimeTarget, options),
     ]
   }
 
@@ -954,7 +1010,7 @@ const applyCollectionTarget = (
 const applyGlobalTarget = (
   config: Config,
   options: PayloadIsrConfig,
-  target: GlobalISRTarget,
+  target: AnyGlobalISRTarget,
 ): void => {
   if (target.disabled) {
     logDebugTrace(options, 'config.applyGlobalTarget.skip.disabled', {
@@ -977,12 +1033,14 @@ const applyGlobalTarget = (
     return
   }
 
+  // The matched global determines the document type dispatched to this hook.
+  const runtimeTarget = target as GlobalISRTarget
   const existingGlobal = config.globals[index]
   const hooks = {
     ...(existingGlobal.hooks ?? {}),
   }
 
-  hooks.afterChange = [...(hooks.afterChange ?? []), buildGlobalAfterChangeHook(target, options)]
+  hooks.afterChange = [...(hooks.afterChange ?? []), buildGlobalAfterChangeHook(runtimeTarget, options)]
 
   config.globals[index] = {
     ...existingGlobal,

@@ -9,45 +9,64 @@ import {
   normalizePaths,
 } from './utils.js'
 
-const getValueAtPath = (
+const getValuesAtPath = (
   value: unknown,
-  path: string,
-): unknown => {
-  if (path.trim().length === 0) {
-    return value
-  }
-
-  const segments = path.split('.').map((segment) => segment.trim()).filter(Boolean)
-  let current: unknown = value
+  segments: ReadonlyArray<string>,
+): unknown[] => {
+  let values: unknown[] = [value]
 
   for (const segment of segments) {
-    if (typeof current !== 'object' || current === null || !(segment in current)) {
-      return undefined
-    }
+    const pending = values
+    values = []
+    const visited = new WeakSet<object>()
 
-    current = (current as Record<string, unknown>)[segment]
+    while (pending.length > 0) {
+      const current = pending.pop()
+      if (typeof current !== 'object' || current === null || visited.has(current)) {
+        continue
+      }
+      visited.add(current)
+
+      if (Array.isArray(current) && !Object.hasOwn(current, segment) && !/^\d+$/.test(segment)) {
+        for (const item of current) {
+          pending.push(item)
+        }
+      } else if (Object.hasOwn(current, segment)) {
+        values.push((current as Record<string, unknown>)[segment])
+      }
+    }
   }
 
-  return current
+  return values
 }
 
 const hasReferenceMatch = (
   value: unknown,
   references: ReadonlySet<string>,
 ): boolean => {
-  if (typeof value === 'string' || typeof value === 'number') {
-    return references.has(String(value))
+  const pending = [value]
+  const visited = new WeakSet<object>()
+
+  while (pending.length > 0) {
+    const current = pending.pop()
+    if (typeof current === 'string' || typeof current === 'number') {
+      if (references.has(String(current))) {
+        return true
+      }
+      continue
+    }
+
+    if (typeof current !== 'object' || current === null || visited.has(current)) {
+      continue
+    }
+    visited.add(current)
+
+    for (const item of Object.values(current)) {
+      pending.push(item)
+    }
   }
 
-  if (Array.isArray(value)) {
-    return value.some((item) => hasReferenceMatch(item, references))
-  }
-
-  if (typeof value !== 'object' || value === null) {
-    return false
-  }
-
-  return Object.values(value).some((item) => hasReferenceMatch(item, references))
+  return false
 }
 
 const normalizeReferenceValues = (
@@ -97,10 +116,10 @@ const getDefaultReferencingPaths = (
 
 const getSearchRootsFromFieldPaths = <TDoc extends ISRDocument>(
   doc: TDoc,
-  fieldPaths: ReadonlyArray<string>,
+  fieldPaths: ReadonlyArray<ReadonlyArray<string>>,
 ): unknown[] => {
   return fieldPaths
-    .map((fieldPath) => getValueAtPath(doc, fieldPath))
+    .flatMap((fieldPath) => getValuesAtPath(doc, fieldPath))
     .filter((value) => typeof value !== 'undefined')
 }
 
@@ -112,7 +131,9 @@ export const findReferencingPaths = async <TDoc extends ISRDocument = ISRDocumen
     return []
   }
 
-  const fieldPaths = options.fieldPaths?.filter((fieldPath) => fieldPath.trim().length > 0) ?? []
+  const fieldPaths = options.fieldPaths
+    ?.map((fieldPath) => fieldPath.split('.').map((segment) => segment.trim()).filter(Boolean))
+    .filter((segments) => segments.length > 0) ?? []
   if (fieldPaths.length === 0 && !options.getSearchRoots) {
     throw new Error(
       '[payload-isr] findReferencingPaths requires either fieldPaths or getSearchRoots.',
@@ -149,7 +170,7 @@ export const findReferencingPaths = async <TDoc extends ISRDocument = ISRDocumen
 
     if (options.resolvePaths) {
       const nonAbsolute = resolvedPaths.filter(
-        (p) => typeof p === 'string' && p.length > 0 && !p.startsWith('/'),
+        (p) => typeof p === 'string' && p.trim().length > 0 && !p.trim().startsWith('/'),
       )
       if (nonAbsolute.length > 0) {
         logger.warn(
@@ -161,6 +182,17 @@ export const findReferencingPaths = async <TDoc extends ISRDocument = ISRDocumen
     paths.push(...resolvedPaths)
   }
 
+  const resolveCandidateSafely = async (doc: TDoc, meta: ReferencingDocumentMeta): Promise<void> => {
+    try {
+      await resolveCandidatePaths(doc, meta)
+    } catch (error) {
+      logger.warn(
+        `[payload-isr] findReferencingPaths: failed to inspect a document in ${meta.scope} "${meta.slug}". Skipping document.`,
+        error,
+      )
+    }
+  }
+
   for (const slug of options.targets.collections ?? []) {
     try {
       const result = await options.payload.find({
@@ -168,10 +200,11 @@ export const findReferencingPaths = async <TDoc extends ISRDocument = ISRDocumen
         depth: queryDepth,
         overrideAccess,
         pagination: false,
+        req: options.req,
       })
 
       for (const doc of result.docs as unknown as TDoc[]) {
-        await resolveCandidatePaths(doc, { slug, scope: 'collection' })
+        await resolveCandidateSafely(doc, { slug, scope: 'collection' })
       }
     } catch (error) {
       logger.warn(
@@ -187,9 +220,10 @@ export const findReferencingPaths = async <TDoc extends ISRDocument = ISRDocumen
         slug,
         depth: queryDepth,
         overrideAccess,
+        req: options.req,
       }) as unknown as TDoc
 
-      await resolveCandidatePaths(doc, { slug, scope: 'global' })
+      await resolveCandidateSafely(doc, { slug, scope: 'global' })
     } catch (error) {
       logger.warn(
         `[payload-isr] findReferencingPaths: failed to query global "${slug}". Skipping.`,

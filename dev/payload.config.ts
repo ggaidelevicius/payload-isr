@@ -1,12 +1,12 @@
 import { mongooseAdapter } from '@payloadcms/db-mongodb'
 import { lexicalEditor } from '@payloadcms/richtext-lexical'
-import { MongoMemoryReplSet } from 'mongodb-memory-server'
 import path from 'path'
 import { buildConfig } from 'payload'
 import sharp from 'sharp'
 import { fileURLToPath } from 'url'
 
 import { payloadIsr } from '../src/index.js'
+import { getOrCreateMemoryDatabase } from './helpers/memoryDatabase.js'
 import {
   createIsrDevLogger,
   recordFullRebuild,
@@ -21,32 +21,6 @@ const dirname = path.dirname(filename)
 
 if (!process.env.ROOT_DIR) {
   process.env.ROOT_DIR = dirname
-}
-
-declare global {
-   
-  var __payloadMemoryDbUri: string | undefined
-   
-  var __payloadMemoryDbUriPromise: Promise<string> | undefined
-}
-
-const getOrCreateMemoryDatabaseURI = async (): Promise<string> => {
-  if (globalThis.__payloadMemoryDbUri) {
-    return globalThis.__payloadMemoryDbUri
-  }
-
-  if (!globalThis.__payloadMemoryDbUriPromise) {
-    globalThis.__payloadMemoryDbUriPromise = MongoMemoryReplSet.create({
-      replSet: {
-        count: 1,
-        dbName: 'payloadmemory',
-      },
-    }).then((memoryDB) => `${memoryDB.getUri()}&retryWrites=true`)
-  }
-
-  const uri = await globalThis.__payloadMemoryDbUriPromise
-  globalThis.__payloadMemoryDbUri = uri
-  return uri
 }
 
 const parseBoolean = (
@@ -123,7 +97,7 @@ const buildConfigWithMemoryDB = async () => {
   if (isPayloadGenerateCommand && !process.env.DATABASE_URL) {
     process.env.DATABASE_URL = 'mongodb://127.0.0.1:27017/payloadmemory'
   } else if (process.env.NODE_ENV === 'test' || !process.env.DATABASE_URL) {
-    process.env.DATABASE_URL = await getOrCreateMemoryDatabaseURI()
+    process.env.DATABASE_URL = (await getOrCreateMemoryDatabase()).uri
   }
 
   return buildConfig({
@@ -214,7 +188,9 @@ const buildConfigWithMemoryDB = async () => {
             tagResolver: ({ result }) => ['posts', `post:${result.id}`],
             unpublish: {
               matcher: ({ args, operation }) => {
-                if (operation !== 'updateByID') {return false}
+                if (operation !== 'update' && operation !== 'updateByID') {
+                  return false
+                }
                 const data = args?.data
                 return (
                   typeof data === 'object' &&
@@ -242,7 +218,7 @@ const buildConfigWithMemoryDB = async () => {
             })
             return shouldTrigger
           },
-          trigger: async (context) => {
+          trigger: (context) => {
             recordFullRebuild(context)
             isrLogger.warn({
               type: 'callback',
@@ -272,8 +248,8 @@ const buildConfigWithMemoryDB = async () => {
             source: 'payload-isr-dev',
           })
         },
-        revalidateTag: (tag, meta) => {
-          recordTagRevalidation(tag, meta)
+        revalidateTag: async (tag, meta) => {
+          await recordTagRevalidation(tag, meta)
           isrLogger.info?.({
             type: 'callback',
             callback: 'revalidateTag',

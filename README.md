@@ -27,6 +27,8 @@ The plugin registers Payload `afterOperation` and `afterChange` hooks on whichev
 
 Delete revalidation is opt-in via `onDelete` on each collection target. The plugin warns at startup when a collection has update resolvers but no `onDelete` strategy.
 
+Bulk collection updates invoke guards and resolvers once per successfully updated document. Each callback receives that document as `result`; the original bulk response, including errors, is returned unchanged to Payload.
+
 ## Minimal setup
 
 The smallest valid configuration — no tags, no full rebuild, one collection:
@@ -82,7 +84,7 @@ export default buildConfig({
       },
 
       // Optional. Called once per resolved tag. Omit if you don't use cache tags.
-      revalidateTag: (tag) => nextRevalidateTag(tag),
+      revalidateTag: (tag) => nextRevalidateTag(tag, { expire: 0 }),
 
       collections: [
         {
@@ -187,7 +189,8 @@ export default buildConfig({
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `enabled` | `boolean` | — | Whether full rebuild is active. Recommended: `process.env.NODE_ENV === 'production'`. |
+| `enabled` | `boolean` | `true` when configured | Whether full rebuild is active. Recommended: `process.env.NODE_ENV === 'production'`. |
+| `probeTimeoutMs` | `number` | `10000` | Maximum probe duration in milliseconds. Must be finite, positive, and at most `2147483647`; invalid values warn and use the default. |
 | `trigger` | `(context) => void \| Promise<void>` | — | Required. What to call when a rebuild is triggered. |
 | `shouldTrigger` | `(context) => boolean` | `context.probeStatus === 404` | Override the condition for triggering. |
 
@@ -221,6 +224,8 @@ revalidatePath: (path, meta) => {
 
 ### `revalidateTag(tag, meta?)`
 
+The Next.js 16 example uses `{ expire: 0 }` for immediate expiration after CMS changes. Use `'max'` if you prefer serving stale content while refreshing it in the background. See the [Next.js tag revalidation documentation](https://nextjs.org/docs/app/api-reference/functions/revalidateTag).
+
 ```ts
 meta?: {
   reason: RevalidationReason
@@ -244,7 +249,7 @@ These are the defaults to be aware of — getting them wrong is a common source 
 
 **`shouldHandle`** — defaults to `doc._status === 'published'` or, if the document has no `_status` field at all, `true`. If you don't use Payload drafts, every publish/update will pass the default guard automatically. If you do use drafts, only published docs trigger revalidation by default. Override with a custom `shouldHandle` to change this. Note: collection unpublish handling runs before this guard.
 
-**`operations`** — defaults to `['create', 'update', 'updateByID']`. Custom Payload operations are not included. Override if you need to respond to additional operation types.
+**`operations`** — defaults to `['create', 'update', 'updateByID']`. Override to select a subset of these content operations. Unpublish matching runs before this filter.
 
 **`onDelete`** — not configured by default. Deletes are skipped without it. The plugin warns at startup for collection targets that define update resolvers but no `onDelete`.
 
@@ -256,11 +261,15 @@ These are the defaults to be aware of — getting them wrong is a common source 
 
 **Invalid `probeURL` values** — if a resolver returns an empty, relative, or non-HTTP URL, the plugin warns and skips probing for that operation.
 
+**Probe failures** — network failures and timeouts produce `probeStatus: null`, so normal path/tag revalidation continues unless a custom `shouldTrigger` handles that status. Probe resolvers are not called when `fullRebuild` is absent or explicitly disabled.
+
+**Callback failures** — plugin guard, resolver, revalidation, and rebuild-trigger errors propagate to Payload. Subsequent callbacks for the operation are not guaranteed to run. Handle recoverable errors inside your callbacks when continued processing is required.
+
 ## Unpublish detection
 
 When a collection update is detected as an unpublish, the plugin uses unpublish-specific resolvers if provided, falling back to the main resolvers.
 
-Default unpublish matcher: the operation must be `updateByID` and request data must include `_status: 'draft'`. Extra fields are allowed. This is an update-to-draft signal and does not strictly validate previous persisted state.
+Default unpublish matcher: the operation must be `update` or `updateByID`, and request data must include `_status: 'draft'`. Extra fields are allowed. This is an update-to-draft signal and does not strictly validate previous persisted state.
 
 If your app uses a different field to control publish state (e.g. `isPublished: boolean`), provide a custom `unpublish.matcher`:
 
@@ -271,8 +280,8 @@ If your app uses a different field to control publish state (e.g. `isPublished: 
   unpublish: {
     // Detect your custom unpublish pattern
     matcher: ({ args, operation }) => {
-      const data = args.req.data as Record<string, unknown>
-      return operation === 'updateByID' && data.isPublished === false && Object.keys(data).length === 1
+      if (operation !== 'update' && operation !== 'updateByID') return false
+      return args.data.isPublished === false
     },
     // Optional: different paths/tags on unpublish (falls back to main resolvers if omitted)
     pathResolver: ({ result }) => [`/posts/${result.slug}`, '/posts'],
@@ -315,6 +324,7 @@ import { findReferencingPaths, payloadIsr } from '@ggaidelevicius/payload-isr'
   referencePathResolver: ({ req, result }) =>
     findReferencingPaths({
       payload: req.payload,
+      req,
       referencedValues: result.id,
       targets: {
         collections: ['pages', 'news'],
@@ -329,11 +339,13 @@ This fetches candidate documents from `pages`, `news`, and `homepage`, then appl
 
 ### How matching works
 
-The helper recursively walks the values at each `fieldPath` (or the roots returned by `getSearchRoots`) and checks whether any string or number matches one of the `referencedValues`. You don't need to account for nesting — the search is depth-unlimited within the extracted roots.
+The helper walks the values at each `fieldPath` (or the roots returned by `getSearchRoots`) and checks whether any string or number matches one of the `referencedValues`. Dotted paths traverse arrays of blocks or relationships: `layout.relatedPost` checks `relatedPost` in every layout entry. Explicit indexes such as `layout.0.relatedPost` select only that entry. Matching supports deeply nested and cyclic search roots.
 
 By default, only published documents are candidates (`_status === 'published'`, or docs without `_status`). Override this with `shouldInclude`.
 
 By default, queries run with `depth: 0` and `overrideAccess: true`. This keeps relationship values as IDs (better for stable matching) and avoids access-scoped misses in system-level revalidation. Override with `queryDepth` / `overrideAccess` if your project needs different behavior.
+
+Pass the hook's `req` to preserve its transaction, locale, user, and context. This is especially useful with `overrideAccess: false`. A candidate's failing `shouldInclude`, `getSearchRoots`, or `resolvePaths` callback is logged and skips only that document; other candidates continue to be checked.
 
 ### How paths are resolved
 
@@ -375,6 +387,7 @@ Override `resolvePaths` when the default path convention doesn't match your rout
 referencePathResolver: ({ req, result }) =>
   findReferencingPaths({
     payload: req.payload,
+    req,
     referencedValues: result.id,
     targets: {
       collections: ['pages', 'news'],
@@ -394,6 +407,7 @@ referencePathResolver: ({ req, result }) =>
 | Option | Required | Description |
 |---|---|---|
 | `payload` | Yes | Payload instance. Available as `args.req.payload` in hook resolvers. |
+| `req` | No | Originating Payload request, preserving its transaction, locale, user, and context. Pass the hook's `req`. |
 | `referencedValues` | Yes | The ID(s) to search for — typically `result.id`. Accepts a single value or an array; `null`/`undefined` entries are ignored. |
 | `targets` | Yes | `{ collections?, globals? }` — which slugs to scan for references. |
 | `fieldPaths` | One of `fieldPaths`/`getSearchRoots` | Dot-separated field paths to inspect on each candidate document (e.g. `['layout', 'hero.blocks']`). Fields that don't exist on a document are silently skipped. |
@@ -424,7 +438,7 @@ When to enable it:
 - CDN or edge cache scenarios where route/tag revalidation alone is insufficient
 
 How it works:
-1. `fullRebuild.enabled` must be `true`
+1. `fullRebuild` must be configured, with `enabled` not set to `false`
 2. The target must have a `probeURL` resolver — without it, no probe runs
 3. Plugin fetches `probeURL` after a publish/update
 4. If `fullRebuild.shouldTrigger(context)` returns `true` (default: `probeStatus === 404`), `trigger()` is called
@@ -528,9 +542,15 @@ logger: {
 ```bash
 pnpm hooks:install   # install commit-msg and other git hooks
 pnpm dev             # start the bundled dev app
-pnpm test:int        # run integration tests
+pnpm test:int        # run all unit and integration tests once
+pnpm lint            # check source, tests, and development configuration
 pnpm build           # build the plugin
+pnpm publish:check   # lint, test, rebuild, and inspect the package contents
 ```
+
+Builds use the TypeScript 7 native compiler. The `typescript` dependency aliases Microsoft's TypeScript 6 compatibility package for tools that need the JavaScript compiler API. The parser overrides keep Payload's lint configuration compatible with ESLint 10. Integration tests create a temporary MongoDB replica set and close it, along with Payload, when the suite finishes.
+
+Pull requests and pushes to `main` run `pnpm publish:check` in CI. Publishing remains restricted to commits with a valid release marker.
 
 Environment variables for the bundled `dev/` app:
 
